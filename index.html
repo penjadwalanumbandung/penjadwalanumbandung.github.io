@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Jadwal UMB UI - Versi Final 1.7</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+    }
+  </script>
+  <style>
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    .animate-in { animation: fadeIn 400ms ease-out both; }
+    .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
+    .dark .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; }
+
+    @media print {
+      @page { size: A4 portrait; margin: 10mm; }
+      .no-print { display: none !important; }
+      .print-only { display: block !important; }
+      body { background: white !important; color: black !important; padding: 0 !important; margin: 0 !important; overflow: visible !important; }
+      .main-content { padding: 0 !important; margin: 0 !important; overflow: visible !important; display: block !important; }
+      .day-section { page-break-inside: avoid; break-inside: avoid; margin-bottom: 2rem; border-bottom: 1px solid #eee; padding-bottom: 1rem; }
+      table { width: 100% !important; border-collapse: collapse !important; table-layout: auto !important; border: 1.5px solid #000 !important; }
+      th, td { border: 1px solid #000 !important; padding: 8px 6px !important; text-align: left; font-size: 8.5pt !important; color: black !important; vertical-align: top; }
+      th { background-color: #f3f4f6 !important; font-weight: bold !important; text-transform: uppercase; }
+      tr { page-break-inside: avoid; break-inside: avoid; }
+    }
+    .print-only { display: none; }
+  </style>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.378.0"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" data-type="module">
+    import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+    import ReactDOM from 'react-dom/client';
+    import { 
+      LayoutDashboard, RefreshCw, Search, Menu, X, UserCog, Check,
+      ChevronRight, Database, MapPin, Calendar, Clock, FileUp, Trash2,
+      SortAsc, SortDesc, ArrowUpDown, Download, Printer, SearchCode, 
+      FileText, Ban, ArrowRightLeft, Moon, Sun, ArrowLeft, Info, History, RotateCcw, AlertCircle, BellRing, User
+    } from 'lucide-react';
+
+    const DAYS_ORDER = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+    const TIMES_SLOTS = [
+      "07:00-08:40", "07:00-09:30", "08:50-10:30", "09:40-12:10", 
+      "10:40-12:20", "13:00-14:40", "13:00-15:30", "14:50-16:30", 
+      "15:40-18:10", "16:40-18:20", "18:20-20:50", "18:30-20:10"
+    ];
+
+    const STORAGE_KEY = "umb_schedule_v8_7";
+    const HISTORY_KEY = "umb_history_v8_7";
+    const ADMIN_KEY = "umb_admin_v8_7";
+    const THEME_KEY = "umb_theme_dark";
+
+    // Helper: Sort by day order and time
+    const sortSchedulesByDay = (list) => {
+      return [...list].sort((a, b) => {
+        const dayA = DAYS_ORDER.indexOf(a.hari);
+        const dayB = DAYS_ORDER.indexOf(b.hari);
+        if (dayA !== dayB) return dayA - dayB;
+        return a.waktu.localeCompare(b.waktu);
+      });
+    };
+
+    const parseTimeToMinutes = (timeStr) => {
+      if (!timeStr || !timeStr.includes(':')) return null;
+      try {
+        const parts = timeStr.trim().split(':');
+        return (parseInt(parts[0], 10) * 60) + parseInt(parts[1], 10);
+      } catch(e) { return null; }
+    };
+
+    const getSlotRange = (slotStr) => {
+      if (!slotStr || !slotStr.includes('-')) return null;
+      const parts = slotStr.split('-');
+      const start = parseTimeToMinutes(parts[0]);
+      const end = parseTimeToMinutes(parts[1]);
+      return (start === null || end === null) ? null : { start, end };
+    };
+
+    const isOverlap = (rangeA, rangeB) => {
+      if (!rangeA || !rangeB) return false;
+      return Math.max(rangeA.start, rangeB.start) < Math.min(rangeA.end, rangeB.end);
+    };
+
+    function App() {
+      const [isDarkMode, setIsDarkMode] = useState(() => localStorage.getItem(THEME_KEY) === 'true');
+      const [activeMenu, setActiveMenu] = useState('dashboard');
+      const [isSidebarOpen, setSidebarOpen] = useState(true);
+      const [schedules, setSchedules] = useState([]);
+      const [historyLog, setHistoryLog] = useState(() => {
+        const saved = localStorage.getItem(HISTORY_KEY);
+        return saved ? JSON.parse(saved) : [];
+      });
+      const [selectedProdi, setSelectedProdi] = useState('');
+      const [searchTerm, setSearchTerm] = useState('');
+      const [occupiedSearch, setOccupiedSearch] = useState('');
+      const [adminName, setAdminName] = useState(() => localStorage.getItem(ADMIN_KEY) || 'Admin UMB');
+      const [tempAdminName, setTempAdminName] = useState('');
+      const [isEditingAdmin, setIsEditingAdmin] = useState(false);
+      const [scanConfig, setScanConfig] = useState({ hari: 'Senin', waktu: '07:00-09:30' });
+      const [sortConfig, setSortConfig] = useState({ key: 'hari', direction: 'asc' });
+      const [toast, setToast] = useState(null);
+      
+      const [swapMode, setSwapMode] = useState('menu'); 
+      const [swapStep, setSwapStep] = useState(1);
+      const [swapDosenAsal, setSwapDosenAsal] = useState(null);
+      const [swapMatkulAsal, setSwapMatkulAsal] = useState(null);
+      const [swapTargetDay, setSwapTargetDay] = useState('Senin');
+      const [swapReason, setSwapReason] = useState('');
+      
+      const fileInputRef = useRef(null);
+
+      useEffect(() => {
+        const savedData = localStorage.getItem(STORAGE_KEY);
+        if (savedData) {
+          try {
+            const parsed = JSON.parse(savedData);
+            setSchedules(parsed);
+            if (parsed.length > 0) {
+              const uniqueProdis = [...new Set(parsed.map(s => s.prodi))].sort();
+              setSelectedProdi(uniqueProdis[0]);
+            }
+          } catch (e) { console.error("Gagal load data", e); }
+        }
+      }, []);
+
+      useEffect(() => { if (toast) { const timer = setTimeout(() => setToast(null), 3500); return () => clearTimeout(timer); } }, [toast]);
+      useEffect(() => { 
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(historyLog));
+      }, [historyLog]);
+      useEffect(() => { localStorage.setItem(ADMIN_KEY, adminName); }, [adminName]);
+      useEffect(() => { 
+        localStorage.setItem(THEME_KEY, isDarkMode);
+        if (isDarkMode) document.documentElement.classList.add('dark');
+        else document.documentElement.classList.remove('dark');
+      }, [isDarkMode]);
+
+      const handleFileUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+          try {
+            const data = new Uint8Array(evt.target.result);
+            const wb = XLSX.read(data, { type: 'array' });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            const rawData = XLSX.utils.sheet_to_json(ws);
+            const mapped = rawData.map((row, i) => ({
+              id: String(row.ID || `row-${i}-${Date.now()}`),
+              matkul: String(row['Nama Matkul'] || row.MATAKULIAH || row.MATKUL || 'Tanpa Nama').trim(),
+              dosen: String(row['Dosen Pengampu'] || row.DOSEN || 'TBA').trim(),
+              hari: String(row.Hari || row.HARI || 'Senin').trim(),
+              waktu: String(row.Waktu || row.JAM || '-').trim(),
+              ruangan: String(row.Ruangan || row.RUANG || '-').trim(),
+              prodi: String(row['Program Studi'] || row.PRODI || 'N/A').trim(),
+              kelas: String(row.Kelas || row.KELAS || '-').trim(),
+              sks: String(row.SKS || '0'),
+              semester: String(row.Semester || row.SMT || '0'),
+              keterangan_rapat: String(row['Keterangan Rapat'] || row.KETERANGAN_RAPAT || row.Log || '-')
+            }));
+            setSchedules(mapped);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(mapped));
+            const uniqueProdis = [...new Set(mapped.map(s => s.prodi))].sort();
+            if (uniqueProdis.length > 0) setSelectedProdi(uniqueProdis[0]);
+            setToast("Database berhasil diimpor!");
+          } catch (err) { setToast("Gagal memproses file Excel."); }
+        };
+        reader.readAsArrayBuffer(file);
+      };
+
+      // REVISION 5 & 6: Smart Export
+      const downloadUpdatedExcel = () => {
+        const toExport = filteredSchedules; // Uses currently searched/filtered data
+        if (toExport.length === 0) return;
+        const dataToExport = toExport.map(s => ({
+          'ID': s.id, 'Program Studi': s.prodi, 'Nama Matkul': s.matkul, 'Dosen Pengampu': s.dosen,
+          'Kelas': s.kelas, 'Semester': s.semester, 'SKS': s.sks, 'Hari': s.hari, 'Waktu': s.waktu,
+          'Ruangan': s.ruangan, 'Log Perubahan': s.keterangan_rapat
+        }));
+        const ws = XLSX.utils.json_to_sheet(dataToExport);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Jadwal Terkini");
+        const filename = searchTerm ? `Jadwal_Cari_${searchTerm}.xlsx` : `Jadwal_${selectedProdi}_Update.xlsx`;
+        XLSX.writeFile(wb, filename);
+        setToast(`File Excel berhasil diekspor!`);
+      };
+
+      const handleSort = (key) => {
+        let direction = 'asc';
+        if (sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
+        setSortConfig({ key, direction });
+      };
+
+      const filteredSchedules = useMemo(() => {
+        let base = schedules.filter(s => s.prodi === selectedProdi);
+        if (searchTerm) {
+          const q = searchTerm.toLowerCase();
+          base = base.filter(s => 
+            s.matkul.toLowerCase().includes(q) || s.dosen.toLowerCase().includes(q) ||
+            s.ruangan.toLowerCase().includes(q) || s.hari.toLowerCase().includes(q) ||
+            s.kelas.toLowerCase().includes(q) || s.waktu.toLowerCase().includes(q)
+          );
+        }
+        return base.sort((a, b) => {
+          let valA, valB;
+          if (sortConfig.key === 'hari') {
+            valA = DAYS_ORDER.indexOf(a.hari);
+            valB = DAYS_ORDER.indexOf(b.hari);
+            if (valA === -1) valA = 99; if (valB === -1) valB = 99;
+            if (valA === valB) return a.waktu.localeCompare(b.waktu);
+          } else {
+            valA = String(a[sortConfig.key] || "").toLowerCase();
+            valB = String(b[sortConfig.key] || "").toLowerCase();
+          }
+          if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
+          if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
+          return 0;
+        });
+      }, [schedules, selectedProdi, searchTerm, sortConfig]);
+
+      // REVISION 3 & 4: Scanner logic with Search
+      const scannerData = useMemo(() => {
+        const targetRange = getSlotRange(scanConfig.waktu);
+        const allRooms = [...new Set(schedules.map(s => s.ruangan.trim()))]
+          .filter(r => r && r !== '-' && !r.toLowerCase().includes('online'))
+          .sort((a, b) => a.localeCompare(b, undefined, {numeric: true}));
+          
+        const occupiedOnTime = schedules.filter(s => 
+          s.hari.trim().toLowerCase() === scanConfig.hari.trim().toLowerCase() && 
+          isOverlap(targetRange, getSlotRange(s.waktu))
+        );
+        
+        const occupiedRoomNames = [...new Set(occupiedOnTime.map(s => s.ruangan.trim()))];
+        
+        let filteredOccupied = occupiedOnTime.filter(s => allRooms.includes(s.ruangan.trim()));
+        if (occupiedSearch) {
+          const q = occupiedSearch.toLowerCase();
+          filteredOccupied = filteredOccupied.filter(s => 
+            s.ruangan.toLowerCase().includes(q) || s.matkul.toLowerCase().includes(q) || s.dosen.toLowerCase().includes(q) || s.prodi.toLowerCase().includes(q)
+          );
+        }
+
+        return { 
+          free: allRooms.filter(r => !occupiedRoomNames.includes(r)), 
+          occupied: filteredOccupied 
+        };
+      }, [schedules, scanConfig, occupiedSearch]);
+
+      const swapSafeCandidates = useMemo(() => {
+        if (!swapMatkulAsal) return [];
+        const lecturerAsal = swapDosenAsal;
+        const timeAsal = getSlotRange(swapMatkulAsal.waktu);
+        const dayAsal = swapMatkulAsal.hari;
+        const classAsal = swapMatkulAsal.kelas;
+
+        const candidates = schedules.filter(target => 
+          target.prodi === selectedProdi && 
+          target.id !== swapMatkulAsal.id
+        ).filter(target => {
+          const timeTuj = getSlotRange(target.waktu);
+          const dayTuj = target.hari;
+          const lecturerTuj = target.dosen;
+          const classTuj = target.kelas;
+
+          const b1 = schedules.some(s => s.id !== swapMatkulAsal.id && s.id !== target.id && s.dosen === lecturerAsal && s.hari === dayTuj && isOverlap(timeTuj, getSlotRange(s.waktu)));
+          const b2 = schedules.some(s => s.id !== swapMatkulAsal.id && s.id !== target.id && s.dosen === lecturerTuj && s.hari === dayAsal && isOverlap(timeAsal, getSlotRange(s.waktu)));
+          const b3 = schedules.some(s => s.id !== swapMatkulAsal.id && s.id !== target.id && s.kelas === classAsal && s.hari === dayTuj && isOverlap(timeTuj, getSlotRange(s.waktu)));
+          const b4 = schedules.some(s => s.id !== swapMatkulAsal.id && s.id !== target.id && s.kelas === classTuj && s.hari === dayAsal && isOverlap(timeAsal, getSlotRange(s.waktu)));
+
+          return !b1 && !b2 && !b3 && !b4;
+        });
+
+        // REVISION 1: Order candidates by Day
+        return sortSchedulesByDay(candidates);
+      }, [swapMatkulAsal, schedules, selectedProdi, swapDosenAsal]);
+
+      const moveOptions = useMemo(() => {
+        if (!swapMatkulAsal) return [];
+        const allRooms = [...new Set(schedules.map(s => s.ruangan.trim()))].filter(r => r && r !== '-' && !r.toLowerCase().includes('online'));
+        const targetDaySchedules = schedules.filter(s => s.hari.toLowerCase() === swapTargetDay.toLowerCase());
+        const options = [];
+
+        TIMES_SLOTS.forEach(jam => {
+          const rangeJam = getSlotRange(jam);
+          if (targetDaySchedules.some(s => s.dosen === swapDosenAsal && isOverlap(rangeJam, getSlotRange(s.waktu)))) return;
+          if (targetDaySchedules.some(s => s.kelas === swapMatkulAsal.kelas && isOverlap(rangeJam, getSlotRange(s.waktu)))) return;
+          allRooms.forEach(rm => {
+            if (!targetDaySchedules.some(s => s.ruangan === rm && isOverlap(rangeJam, getSlotRange(s.waktu)))) {
+              options.push({ hari: swapTargetDay, waktu: jam, ruangan: rm });
+            }
+          });
+        });
+        return options;
+      }, [swapMatkulAsal, swapTargetDay, schedules, swapDosenAsal]);
+
+      // REVISION 2: Improved Log Message for Card
+      const executeSwap = (rowTuj) => {
+        if (!swapReason.trim()) return;
+        const ts = new Date().toLocaleString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        
+        const logAsal = `[${ts}] SWAP: dari ${swapMatkulAsal.hari} ${swapMatkulAsal.waktu} [${swapMatkulAsal.ruangan}] ke ${rowTuj.hari} ${rowTuj.waktu} [${rowTuj.ruangan}] (Alasan: ${swapReason})`;
+        const logTuj = `[${ts}] SWAP: dari ${rowTuj.hari} ${rowTuj.waktu} [${rowTuj.ruangan}] ke ${swapMatkulAsal.hari} ${swapMatkulAsal.waktu} [${swapMatkulAsal.ruangan}] (Alasan: ${swapReason})`;
+
+        const newHistory = {
+          id: Date.now(), type: 'SWAP', admin: adminName, timestamp: ts, reason: swapReason, prodi: selectedProdi,
+          affected: [
+            { id: swapMatkulAsal.id, dosen: swapMatkulAsal.dosen, kelas: swapMatkulAsal.kelas, matkul: swapMatkulAsal.matkul, before: {...swapMatkulAsal}, after: { hari: rowTuj.hari, waktu: rowTuj.waktu, ruangan: rowTuj.ruangan, keterangan_rapat: logAsal } },
+            { id: rowTuj.id, dosen: rowTuj.dosen, kelas: rowTuj.kelas, matkul: rowTuj.matkul, before: {...rowTuj}, after: { hari: swapMatkulAsal.hari, waktu: swapMatkulAsal.waktu, ruangan: swapMatkulAsal.ruangan, keterangan_rapat: logTuj } }
+          ]
+        };
+
+        const updated = schedules.map(s => {
+          if (s.id === swapMatkulAsal.id) return { ...s, hari: rowTuj.hari, waktu: rowTuj.waktu, ruangan: rowTuj.ruangan, keterangan_rapat: logAsal };
+          if (s.id === rowTuj.id) return { ...s, hari: swapMatkulAsal.hari, waktu: swapMatkulAsal.waktu, ruangan: swapMatkulAsal.ruangan, keterangan_rapat: logTuj };
+          return s;
+        });
+
+        setSchedules(updated);
+        setHistoryLog([newHistory, ...historyLog]);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+        setToast("Penukaran Berhasil!");
+        resetSwapFlow();
+      };
+
+      const executeMove = (slot) => {
+        if (!swapReason.trim()) return;
+        const ts = new Date().toLocaleString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        const logMsg = `[${ts}] MOVE: dari ${swapMatkulAsal.hari} ${swapMatkulAsal.waktu} [${swapMatkulAsal.ruangan}] ke ${slot.hari} ${slot.waktu} [${slot.ruangan}] (Alasan: ${swapReason})`;
+
+        const newHistory = {
+          id: Date.now(), type: 'MOVE', admin: adminName, timestamp: ts, reason: swapReason, prodi: selectedProdi,
+          affected: [ { id: swapMatkulAsal.id, dosen: swapMatkulAsal.dosen, kelas: swapMatkulAsal.kelas, matkul: swapMatkulAsal.matkul, before: {...swapMatkulAsal}, after: { hari: slot.hari, waktu: slot.waktu, ruangan: slot.ruangan, keterangan_rapat: logMsg } } ]
+        };
+
+        const updated = schedules.map(s => { if (s.id === swapMatkulAsal.id) return { ...s, hari: slot.hari, waktu: slot.waktu, ruangan: slot.ruangan, keterangan_rapat: logMsg }; return s; });
+        setSchedules(updated);
+        setHistoryLog([newHistory, ...historyLog]);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+        setToast("Pemindahan Berhasil!");
+        resetSwapFlow();
+      };
+
+      const resetSwapFlow = () => { setSwapMode('menu'); setSwapStep(1); setSwapDosenAsal(null); setSwapMatkulAsal(null); setSwapReason(''); };
+      const handleStepBack = () => { if (swapStep > 1) setSwapStep(swapStep - 1); else setSwapMode('menu'); };
+      
+      const undoAction = (historyId) => { 
+        const item = historyLog.find(h => h.id === historyId); 
+        if (!item || !confirm("Undo perubahan ini?")) return; 
+        const updated = schedules.map(s => { 
+          const record = item.affected.find(a => a.id === s.id); 
+          return record ? record.before : s; 
+        }); 
+        setSchedules(updated); 
+        setHistoryLog(historyLog.filter(h => h.id !== historyId)); 
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(updated)); 
+        setToast("Berhasil dikembalikan."); 
+      };
+
+      const SortButton = ({ label, sortKey }) => {
+        const isActive = sortConfig.key === sortKey;
+        return (
+          <button onClick={() => handleSort(sortKey)} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all border ${isActive ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:border-blue-300'}`}>
+            {label} {isActive ? (sortConfig.direction === 'asc' ? <SortAsc size={12} /> : <SortDesc size={12} />) : <ArrowUpDown size={12} className="opacity-30" />}
+          </button>
+        );
+      };
+
+      return (
+        <div className={`flex h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans overflow-hidden transition-colors duration-300`}>
+          {toast && (
+            <div className="fixed top-8 left-1/2 -translate-x-1/2 z-[100] animate-in">
+              <div className="bg-slate-900 dark:bg-blue-600 text-white px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border border-white/10 backdrop-blur-md">
+                <BellRing size={16}/>
+                <p className="text-sm font-black uppercase tracking-tight">{toast}</p>
+              </div>
+            </div>
+          )}
+
+          <aside className={`no-print ${isSidebarOpen ? 'w-72' : 'w-20'} bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 transition-all duration-300 flex flex-col z-50 shadow-2xl`}>
+            <div className="p-6 flex items-center gap-4 border-b dark:border-slate-800">
+              <div className="bg-blue-600 p-2.5 rounded-2xl text-white shrink-0 shadow-lg"><Database size={24} /></div>
+              {isSidebarOpen && (
+                <div>
+                  <h1 className="font-black text-xl uppercase tracking-tighter leading-none dark:text-white">UMB Manager</h1>
+                  <p className="text-[10px] font-bold text-blue-500 uppercase tracking-widest mt-1">Final Version 1.7</p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex-1 flex flex-col overflow-y-auto custom-scrollbar">
+              {isSidebarOpen && schedules.length > 0 && (
+                <div className="p-4 space-y-3 border-b dark:border-slate-800">
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Pilih Program Studi:</label>
+                    <select value={selectedProdi} onChange={(e) => setSelectedProdi(e.target.value)} className="w-full bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 p-3 rounded-2xl text-xs font-bold outline-none cursor-pointer dark:text-slate-200">
+                      {[...new Set(schedules.map(s => s.prodi))].sort().map(p => <option key={p} value={p}>{p}</option>)}
+                    </select>
+                  </div>
+                  <button onClick={() => { if(confirm("Hapus seluruh database? Tindakan ini tidak bisa dibatalkan.")) { setSchedules([]); localStorage.removeItem(STORAGE_KEY); setHistoryLog([]); localStorage.removeItem(HISTORY_KEY); } }} className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-[10px] font-black text-red-500 uppercase hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors border border-transparent hover:border-red-100 dark:hover:border-red-900/30">
+                    <Trash2 size={14} /> <span>Kosongkan Database</span>
+                  </button>
+                </div>
+              )}
+
+              <nav className="p-4 space-y-2">
+                {[
+                  { id: 'dashboard', label: 'Dashboard Jadwal', icon: LayoutDashboard },
+                  { id: 'scanner', label: 'Cari Ruang Kosong', icon: SearchCode },
+                  { id: 'swap', label: 'Tukar & Pindah', icon: RefreshCw },
+                  { id: 'history', label: 'Riwayat & Berita', icon: FileText },
+                ].map((item) => (
+                  <button key={item.id} onClick={() => { setActiveMenu(item.id); resetSwapFlow(); }} className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl font-bold text-sm transition-all ${activeMenu === item.id ? 'bg-blue-600 text-white shadow-xl shadow-blue-500/20' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800/50'}`}>
+                    <item.icon size={20} />
+                    {isSidebarOpen && <span className="flex-1 text-left">{item.label}</span>}
+                  </button>
+                ))}
+              </nav>
+            </div>
+
+            <div className="p-4 border-t dark:border-slate-800">
+              {isSidebarOpen && (
+                <div className="bg-slate-50 dark:bg-slate-800/50 p-5 rounded-[2rem] border dark:border-slate-800 group">
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="w-10 h-10 rounded-2xl bg-blue-600 flex items-center justify-center text-white shadow-lg">
+                      <User size={20} />
+                    </div>
+                    <div className="flex-1 overflow-hidden">
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Notulis Aktif</p>
+                      <p className="text-sm font-black truncate dark:text-slate-200">{adminName}</p>
+                    </div>
+                  </div>
+                  
+                  {isEditingAdmin ? (
+                    <div className="flex gap-2 animate-in">
+                      <input autoFocus value={tempAdminName} onChange={(e) => setTempAdminName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && (setAdminName(tempAdminName), setIsEditingAdmin(false))} className="w-full bg-white dark:bg-slate-900 border dark:border-slate-700 px-3 py-2 rounded-xl text-xs font-bold" placeholder="Nama Baru..." />
+                      <button onClick={() => {setAdminName(tempAdminName); setIsEditingAdmin(false);}} className="bg-blue-600 text-white p-2 rounded-xl shadow-md"><Check size={16}/></button>
+                    </div>
+                  ) : (
+                    <button onClick={() => { setTempAdminName(adminName); setIsEditingAdmin(true); }} className="w-full flex items-center justify-center gap-2 py-2.5 bg-white dark:bg-slate-900 border dark:border-slate-700 rounded-xl text-[10px] font-black text-blue-600 uppercase hover:bg-blue-50 dark:hover:bg-blue-600 transition-all shadow-sm">
+                      <UserCog size={14} /> Ganti Nama Notulis
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          </aside>
+
+          <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+            <header className="no-print h-20 bg-white dark:bg-slate-900 border-b dark:border-slate-800 flex items-center justify-between px-8 shrink-0">
+              <div className="flex items-center gap-4">
+                <button onClick={() => setSidebarOpen(!isSidebarOpen)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all dark:text-slate-400"><Menu size={20} /></button>
+                <div className="relative w-80">
+                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300 dark:text-slate-600" size={18} />
+                  <input type="text" placeholder="Cari matkul, dosen, jam..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full bg-slate-50 dark:bg-slate-800/50 border-none rounded-2xl pl-12 pr-4 py-2.5 text-sm font-medium outline-none dark:text-white dark:placeholder-slate-500" />
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition-all">
+                  {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
+                </button>
+                <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".xlsx, .xls" className="hidden" />
+                <button onClick={() => fileInputRef.current.click()} className="flex items-center gap-2 px-4 py-2.5 bg-slate-800 dark:bg-slate-700 text-white rounded-xl text-xs font-black shadow-md"><FileUp size={16} /> Impor Excel</button>
+                {schedules.length > 0 && (
+                  <button onClick={downloadUpdatedExcel} className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-xl text-xs font-black shadow-md"><Download size={16} /> Ekspor Hasil</button>
+                )}
+              </div>
+            </header>
+
+            <main className="flex-1 overflow-y-auto p-8 bg-slate-50/50 dark:bg-slate-950 custom-scrollbar main-content">
+              <div className="max-w-7xl mx-auto">
+                {schedules.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-24 animate-in">
+                    <div className="w-24 h-24 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-[2.5rem] flex items-center justify-center mb-6 shadow-inner"><FileUp size={48} /></div>
+                    <h2 className="text-2xl font-black text-slate-800 dark:text-white uppercase tracking-tighter">Database Kosong</h2>
+                  </div>
+                ) : (
+                  <>
+                    {activeMenu === 'dashboard' && (
+                      <div className="animate-in">
+                        <div className="no-print mb-8 flex items-end justify-between">
+                          <div>
+                            <div className="flex items-center gap-3">
+                              <h2 className="text-3xl font-black text-slate-800 dark:text-white tracking-tighter uppercase leading-none">{selectedProdi}</h2>
+                              <span className="bg-blue-600 text-white text-[10px] font-black px-3 py-1 rounded-full uppercase shadow-lg shadow-blue-500/20">
+                                {searchTerm ? `${filteredSchedules.length} Hasil Filter` : `${filteredSchedules.length} Mata Kuliah`}
+                              </span>
+                            </div>
+                            <p className="text-slate-400 dark:text-slate-500 font-bold text-xs uppercase tracking-widest mt-2">Visualisasi Jadwal Perkuliahan</p>
+                          </div>
+                          <button onClick={() => window.print()} className="no-print flex items-center gap-2 px-6 py-3 bg-slate-900 dark:bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg hover:opacity-90 transition-all"><Printer size={16} /> Cetak Laporan</button>
+                        </div>
+                        
+                        <div className="no-print flex flex-wrap gap-2 mb-8 pb-6 border-b dark:border-slate-800">
+                            <SortButton label="Hari" sortKey="hari" />
+                            <SortButton label="Matakuliah" sortKey="matkul" />
+                            <SortButton label="Dosen" sortKey="dosen" />
+                            <SortButton label="Ruangan" sortKey="ruangan" />
+                        </div>
+
+                        <div className="no-print grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                          {filteredSchedules.map((item) => (
+                            <div key={item.id} className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-[2.5rem] p-6 shadow-sm hover:shadow-2xl transition-all flex flex-col group relative overflow-hidden">
+                              <div className="mb-4">
+                                <div className="flex justify-between items-start mb-3">
+                                  <span className="bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-[10px] font-black px-2 py-1 rounded-lg uppercase">{item.kelas} • SMT {item.semester}</span>
+                                  <span className="text-[10px] font-bold text-slate-300 dark:text-slate-600 uppercase tracking-tight">{item.sks} SKS</span>
+                                </div>
+                                <h3 className="text-lg font-bold text-slate-800 dark:text-white leading-tight h-12 line-clamp-2 uppercase group-hover:text-blue-600">{item.matkul}</h3>
+                                <p className="text-xs font-black text-blue-500 dark:text-blue-400 mt-2 uppercase truncate">{item.dosen}</p>
+                              </div>
+                              <div className="mt-auto bg-slate-50 dark:bg-slate-800/50 rounded-3xl p-4 space-y-2 border border-transparent dark:border-slate-800/50">
+                                <div className="flex items-center gap-3 text-xs font-bold text-slate-600 dark:text-slate-400"><Calendar size={14} className="text-blue-500" /><span>{item.hari}, {item.waktu}</span></div>
+                                <div className="flex items-center gap-3 text-xs font-bold text-slate-600 dark:text-slate-400"><MapPin size={14} className="text-indigo-500" /><span>{item.ruangan}</span></div>
+                              </div>
+                              
+                              {/* REVISION 2: Jadwal Sebelumnya */}
+                              {item.keterangan_rapat !== '-' && (
+                                <div className="mt-4 pt-4 border-t dark:border-slate-800 animate-in">
+                                  <div className="flex items-start gap-2 text-amber-600">
+                                    <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                                    <div className="flex-1 overflow-hidden">
+                                      <p className="text-[9px] font-black uppercase tracking-tight mb-1">Riwayat Perubahan:</p>
+                                      {item.keterangan_rapat.includes('dari') ? (
+                                        <p className="text-[10px] font-bold italic line-clamp-3 leading-relaxed opacity-80">
+                                          {item.keterangan_rapat.split('dari')[1].split('(Alasan')[0]}
+                                          <span className="block mt-1 text-slate-400 not-italic">Alasan: {item.keterangan_rapat.split('Alasan: ')[1]?.replace(')', '')}</span>
+                                        </p>
+                                      ) : (
+                                        <p className="text-[10px] font-bold italic line-clamp-2 leading-relaxed opacity-80">{item.keterangan_rapat}</p>
+                                      )}
+                                      <button onClick={() => setActiveMenu('history')} className="mt-2 text-[9px] font-black uppercase text-blue-600 flex items-center gap-1">Detail Audit <ChevronRight size={10} /></button>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {activeMenu === 'scanner' && (
+                      <div className="animate-in space-y-8">
+                        <div className="bg-white dark:bg-slate-900 p-10 rounded-[3.5rem] shadow-sm border dark:border-slate-800">
+                          <div className="flex items-center gap-6 mb-10 pb-8 border-b dark:border-slate-800">
+                            <div className="bg-blue-600 p-4 rounded-3xl text-white shadow-lg"><SearchCode size={32} /></div>
+                            <div><h2 className="text-3xl font-black text-slate-800 dark:text-white tracking-tight uppercase leading-none">Cek Ruangan Kosong</h2><p className="text-slate-500 font-bold text-sm uppercase tracking-widest mt-2">{scanConfig.hari} | {scanConfig.waktu}</p></div>
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                            <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">Pilih Hari</label><select value={scanConfig.hari} onChange={(e) => setScanConfig({...scanConfig, hari: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 p-4 rounded-2xl font-bold dark:text-slate-200 outline-none">{DAYS_ORDER.map(d => <option key={d} value={d}>{d}</option>)}</select></div>
+                            <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">Pilih Jam</label><select value={scanConfig.waktu} onChange={(e) => setScanConfig({...scanConfig, waktu: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 p-4 rounded-2xl font-bold dark:text-slate-200 outline-none">{TIMES_SLOTS.map(t => <option key={t} value={t}>{t}</option>)}</select></div>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                          <div className="lg:col-span-1 space-y-6">
+                            <h4 className="text-sm font-black text-emerald-600 uppercase tracking-widest px-4">Tersedia ({scannerData.free.length})</h4>
+                            <div className="grid grid-cols-2 gap-4">
+                              {scannerData.free.map(room => (
+                                <div key={room} className="bg-white dark:bg-slate-900 border-2 border-emerald-50 p-6 rounded-[2.5rem] text-center shadow-sm hover:border-emerald-500 transition-all">
+                                  <p className="text-slate-800 dark:text-white font-black text-xl">{room}</p>
+                                  <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 rounded-full text-[9px] font-black uppercase">Kosong</div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                          
+                          <div className="lg:col-span-2 space-y-6">
+                            <div className="flex items-center justify-between px-4">
+                                <h4 className="text-sm font-black text-red-500 uppercase tracking-widest">Terisi ({scannerData.occupied.length})</h4>
+                                <div className="relative w-48">
+                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                                    <input type="text" placeholder="Cari di list terisi..." value={occupiedSearch} onChange={(e) => setOccupiedSearch(e.target.value)} className="w-full bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-xl pl-9 pr-3 py-1.5 text-[10px] font-bold outline-none shadow-sm" />
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[600px] overflow-y-auto pr-2 custom-scrollbar">
+                              {scannerData.occupied.map((s, idx) => (
+                                <div key={idx} className="bg-white dark:bg-slate-900 border dark:border-slate-800 p-5 rounded-3xl shadow-sm border-l-4 border-l-red-500 flex flex-col gap-2">
+                                  <div className="flex justify-between items-start">
+                                      <span className="text-xs font-black text-slate-800 dark:text-white bg-slate-100 dark:bg-slate-800 px-3 py-1 rounded-lg uppercase">{s.ruangan}</span>
+                                      <span className="text-[9px] font-black text-blue-600 uppercase bg-blue-50 dark:bg-blue-900/40 px-2 py-0.5 rounded-md">{s.prodi}</span>
+                                  </div>
+                                  <p className="text-xs font-bold text-slate-700 dark:text-slate-300 leading-tight uppercase line-clamp-1">{s.matkul}</p>
+                                  <div className="mt-auto pt-2 border-t dark:border-slate-800 flex justify-between items-center">
+                                      <p className="text-[10px] font-black text-slate-500 uppercase">{s.dosen}</p>
+                                      <p className="text-[9px] font-black text-red-500 uppercase tracking-tight">{s.waktu}</p>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {activeMenu === 'swap' && (
+                      <div className="animate-in space-y-6">
+                        <div className="bg-white dark:bg-slate-900 p-8 rounded-[3.5rem] shadow-sm border dark:border-slate-800">
+                          <div className="flex items-center justify-between mb-8 pb-6 border-b dark:border-slate-800">
+                             <div className="flex items-center gap-4">
+                               <div className="bg-orange-500 p-3 rounded-2xl text-white shadow-lg"><RefreshCw size={24} /></div>
+                               <div><h2 className="text-2xl font-black text-slate-800 dark:text-white uppercase leading-none">Tukar & Pindah Jadwal</h2></div>
+                             </div>
+                             {swapMode !== 'menu' && (
+                              <button onClick={handleStepBack} className="flex items-center gap-2 px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl text-xs font-black"><ArrowLeft size={16} /> Kembali</button>
+                             )}
+                          </div>
+
+                          {swapMode === 'menu' && (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                              <button onClick={() => setSwapMode('advanced-swap')} className="group p-10 bg-slate-50 dark:bg-slate-800 border-2 border-transparent hover:border-blue-500 rounded-[3rem] transition-all text-left">
+                                <div className="bg-blue-600 w-14 h-14 rounded-2xl flex items-center justify-center text-white mb-6 shadow-xl"><ArrowRightLeft size={28} /></div>
+                                <h3 className="text-xl font-black text-slate-800 dark:text-white uppercase">Advanced Swap</h3>
+                                <p className="text-xs font-bold text-slate-500 mt-2">Menukar satu jadwal dengan jadwal lain (Antar dosen/matkul).</p>
+                              </button>
+                              <button onClick={() => setSwapMode('move')} className="group p-10 bg-slate-50 dark:bg-slate-800 border-2 border-transparent hover:border-emerald-500 rounded-[3rem] transition-all text-left">
+                                <div className="bg-emerald-600 w-14 h-14 rounded-2xl flex items-center justify-center text-white mb-6 shadow-xl"><FileUp size={28} /></div>
+                                <h3 className="text-xl font-black text-slate-800 dark:text-white uppercase">Move to Empty Slot</h3>
+                                <p className="text-xs font-bold text-slate-500 mt-2">Memindahkan jadwal ke slot hari/ruang yang benar-benar kosong.</p>
+                              </button>
+                            </div>
+                          )}
+
+                          {swapMode !== 'menu' && (
+                            <div className="space-y-8 animate-in">
+                              <div className="flex items-center gap-4 px-4">
+                                {[
+                                  { s: 1, label: "Pilih Dosen" },
+                                  { s: 2, label: "Pilih Matkul Asal" },
+                                  { s: 3, label: swapMode === 'advanced-swap' ? "Pilih Matkul Swap" : "Pilih Slot Kosong" }
+                                ].map((step) => (
+                                  <div key={step.s} className="flex items-center gap-2">
+                                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-xs font-black transition-all ${swapStep >= step.s ? 'bg-blue-600 text-white shadow-lg' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>{step.s}</div>
+                                    <span className={`text-[9px] font-black uppercase tracking-tighter ${swapStep === step.s ? 'text-blue-600' : 'text-slate-400'}`}>{step.label}</span>
+                                    {step.s < 3 && <div className={`w-8 h-0.5 rounded ${swapStep > step.s ? 'bg-blue-600' : 'bg-slate-100 dark:bg-slate-800'}`}></div>}
+                                  </div>
+                                ))}
+                              </div>
+
+                              {swapStep === 1 && (
+                                <div className="animate-in grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                                  {[...new Set(schedules.filter(s => s.prodi === selectedProdi).map(s => s.dosen))].sort().map(dosen => (
+                                    <button key={dosen} onClick={() => { setSwapDosenAsal(dosen); setSwapStep(2); }} className="p-5 bg-slate-50 dark:bg-slate-800 border dark:border-slate-800 rounded-3xl text-left hover:border-blue-500 transition-all uppercase text-xs font-black text-slate-800 dark:text-white">{dosen}</button>
+                                  ))}
+                                </div>
+                              )}
+
+                              {swapStep === 2 && (
+                                <div className="animate-in grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  {/* REVISION 1: Sorted by Day */}
+                                  {sortSchedulesByDay(schedules.filter(s => s.dosen === swapDosenAsal && s.prodi === selectedProdi)).map(item => (
+                                    <button key={item.id} onClick={() => { setSwapMatkulAsal(item); setSwapStep(3); }} className="p-8 bg-white dark:bg-slate-800 border-2 border-transparent hover:border-blue-500 rounded-[2.5rem] shadow-sm text-left group">
+                                      <div className="flex justify-between mb-2"><span className="text-[10px] font-black text-blue-600 bg-blue-50 dark:bg-blue-900/40 px-2 py-0.5 rounded-md uppercase">{item.hari}</span></div>
+                                      <h5 className="font-black text-slate-800 dark:text-white text-base leading-tight uppercase group-hover:text-blue-600">{item.matkul}</h5>
+                                      <div className="mt-4 text-[11px] font-bold text-slate-400 uppercase tracking-tight flex items-center gap-4">
+                                        <span>{item.waktu}</span>
+                                        <span className="bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded-lg">R: {item.ruangan}</span>
+                                      </div>
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+
+                              {swapStep === 3 && (
+                                <div className="animate-in space-y-8">
+                                  <div className="flex flex-col md:flex-row gap-4">
+                                     <div className="flex-1 p-6 bg-orange-50 dark:bg-orange-500/10 rounded-[2rem] border-2 border-orange-100 dark:border-orange-500/20">
+                                        <p className="text-[10px] font-black text-orange-600 uppercase mb-2">Asal Jadwal:</p>
+                                        <h5 className="text-base font-black text-slate-800 dark:text-white uppercase leading-tight">{swapMatkulAsal.matkul}</h5>
+                                        <p className="text-[10px] font-bold text-slate-500 mt-1">{swapMatkulAsal.hari}, {swapMatkulAsal.waktu} [{swapMatkulAsal.ruangan}]</p>
+                                     </div>
+                                     <div className="flex-1 p-6 bg-white dark:bg-slate-900 rounded-[2rem] border-2 border-slate-200 dark:border-slate-800">
+                                        <p className="text-[10px] font-black text-blue-600 uppercase mb-2">Berita Acara / Alasan:</p>
+                                        <textarea rows="2" value={swapReason} onChange={(e) => setSwapReason(e.target.value)} placeholder="Tulis alasan perubahan..." className="w-full bg-slate-50 dark:bg-slate-800 border-none px-4 py-3 rounded-xl text-xs font-bold outline-none resize-none dark:text-white" />
+                                     </div>
+                                  </div>
+
+                                  {swapMode === 'advanced-swap' && (
+                                    <div className="space-y-4">
+                                      <h4 className="text-sm font-black text-emerald-600 uppercase tracking-widest px-4 flex items-center gap-2"><Check size={18}/> Kandidat Matkul Swap ({swapSafeCandidates.length})</h4>
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        {swapSafeCandidates.map(target => (
+                                          <button key={target.id} disabled={!swapReason.trim()} onClick={() => executeSwap(target)} className="p-6 bg-white dark:bg-slate-900 border-2 border-emerald-50 hover:border-emerald-500 rounded-[2rem] text-left transition-all disabled:opacity-30 group">
+                                            <div className="flex justify-between items-start mb-2">
+                                                <span className="text-[10px] font-black text-blue-600 bg-blue-50 dark:bg-blue-900/40 px-2 py-0.5 rounded-md uppercase">{target.hari}</span>
+                                                <span className="text-[9px] font-bold text-slate-400 uppercase">{target.kelas}</span>
+                                            </div>
+                                            <h5 className="font-black text-slate-800 dark:text-white text-sm uppercase leading-tight group-hover:text-emerald-600">{target.matkul}</h5>
+                                            <p className="text-[10px] font-bold text-slate-500 mt-0.5">{target.dosen}</p>
+                                            <div className="mt-4 pt-4 border-t dark:border-slate-800 text-[10px] font-black text-slate-400 uppercase">{target.waktu} [{target.ruangan}]</div>
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {swapMode === 'move' && (
+                                    <div className="space-y-6">
+                                       <div className="p-6 bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-[2rem] flex flex-wrap gap-2">
+                                          {DAYS_ORDER.map(d => (
+                                            <button key={d} onClick={() => setSwapTargetDay(d)} className={`px-5 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${swapTargetDay === d ? 'bg-blue-600 text-white shadow-md' : 'bg-slate-50 dark:bg-slate-800 text-slate-400'}`}>{d}</button>
+                                          ))}
+                                       </div>
+                                       <h4 className="text-sm font-black text-emerald-600 uppercase tracking-widest px-4">Pilih Slot Kosong di Hari {swapTargetDay}</h4>
+                                       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3 max-h-96 overflow-y-auto pr-2 custom-scrollbar">
+                                          {moveOptions.map((opt, i) => (
+                                            <button key={i} disabled={!swapReason.trim()} onClick={() => executeMove(opt)} className="p-4 bg-white dark:bg-slate-900 border-2 border-slate-50 dark:border-slate-800 rounded-3xl text-center hover:border-emerald-500 transition-all disabled:opacity-30 group shadow-sm">
+                                              <p className="text-[9px] font-black text-slate-400 mb-1 group-hover:text-emerald-600">{opt.waktu}</p>
+                                              <p className="text-sm font-black text-slate-800 dark:text-white uppercase">{opt.ruangan}</p>
+                                            </button>
+                                          ))}
+                                       </div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {activeMenu === 'history' && (
+                      <div className="animate-in space-y-6">
+                        <div className="bg-white dark:bg-slate-900 p-10 rounded-[3.5rem] shadow-sm border dark:border-slate-800">
+                          <div className="flex items-center gap-5 mb-10 pb-8 border-b dark:border-slate-800">
+                             <div className="bg-blue-600 p-4 rounded-3xl text-white shadow-xl shadow-blue-500/30"><FileText size={32} /></div>
+                             <div>
+                               <h2 className="text-3xl font-black text-slate-800 dark:text-white uppercase leading-none">Berita Acara & Riwayat</h2>
+                               <p className="text-slate-500 font-bold text-[10px] uppercase mt-2">Log Audit Pengelolaan Jadwal Kuliah</p>
+                             </div>
+                          </div>
+
+                          <div className="space-y-6">
+                            {historyLog.map((log) => (
+                              <div key={log.id} className="bg-slate-50 dark:bg-slate-800/20 border dark:border-slate-800 p-8 rounded-[3rem] transition-all hover:border-blue-400 group">
+                                <div className="flex flex-col gap-6">
+                                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                    <div className="flex items-center gap-3">
+                                      <span className={`px-4 py-1.5 rounded-xl text-[10px] font-black uppercase shadow-sm ${log.type === 'SWAP' ? 'bg-orange-600 text-white' : 'bg-emerald-600 text-white'}`}>{log.type}</span>
+                                      <span className="px-4 py-1.5 bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 rounded-xl text-[10px] font-black uppercase tracking-tight">{log.prodi}</span>
+                                    </div>
+                                    <div className="text-right">
+                                      <p className="text-[9px] font-black text-slate-400 uppercase">{log.timestamp}</p>
+                                      <p className="text-xs font-black text-slate-800 dark:text-white uppercase">Oleh: {log.admin}</p>
+                                    </div>
+                                  </div>
+
+                                  <div className="bg-white dark:bg-slate-900 p-6 rounded-[2rem] border dark:border-slate-800 shadow-inner">
+                                    <p className="text-[10px] font-black text-blue-600 uppercase mb-1">Berita Acara:</p>
+                                    <p className="text-sm font-bold text-slate-700 dark:text-slate-300 italic leading-relaxed">"{log.reason}"</p>
+                                  </div>
+
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {log.affected.map((aff, i) => (
+                                      <div key={i} className="bg-white dark:bg-slate-900 p-6 rounded-[2rem] border dark:border-slate-800 shadow-sm relative overflow-hidden">
+                                        <div className="flex justify-between items-start mb-2"><span className="text-[9px] font-black text-blue-600 uppercase bg-blue-50 dark:bg-blue-900/50 px-2 py-0.5 rounded-md">{aff.kelas}</span></div>
+                                        <h4 className="text-xs font-black text-slate-800 dark:text-white uppercase leading-tight truncate">{aff.matkul}</h4>
+                                        <p className="text-[10px] font-bold text-slate-500 uppercase mt-1">{aff.dosen}</p>
+                                        <div className="mt-4 pt-4 border-t dark:border-slate-800 grid grid-cols-2 gap-4">
+                                          <div><p className="text-[8px] font-black text-slate-400 uppercase">Awal:</p><p className="text-[10px] font-bold text-slate-500 line-through leading-tight">{aff.before.hari}, {aff.before.waktu} [{aff.before.ruangan}]</p></div>
+                                          <div><p className="text-[8px] font-black text-emerald-600 uppercase">Baru:</p><p className="text-[10px] font-black text-emerald-600 leading-tight">{aff.after.hari}, {aff.after.waktu} [{aff.after.ruangan}]</p></div>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                  <button onClick={() => undoAction(log.id)} className="w-fit flex items-center gap-2 px-6 py-2.5 bg-red-50 hover:bg-red-600 text-red-600 hover:text-white rounded-xl text-[10px] font-black uppercase transition-all shadow-sm">Kembalikan / Undo</button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* PRINT LAYOUT */}
+                    <div className="print-only">
+                        <div style={{textAlign: 'center', marginBottom: '30px', borderBottom: '2px solid #000', paddingBottom: '15px'}}>
+                           <div style={{fontSize: '20pt', fontWeight: '900', textTransform: 'uppercase', marginBottom: '5px'}}>{searchTerm ? `JADWAL ${searchTerm.toUpperCase()}` : `JADWAL ${selectedProdi.toUpperCase()}`}</div>
+                           <div style={{fontSize: '10pt', color: '#555', fontWeight: 'bold'}}>UNIVERSITAS MUHAMMADIYAH BANDUNG</div>
+                           <div style={{fontSize: '8pt', color: '#777'}}>Notulis: {adminName} | Dicetak: {new Date().toLocaleString('id-ID')}</div>
+                        </div>
+                        <div className="space-y-10">
+                          {DAYS_ORDER.map(day => {
+                            const daySchedules = filteredSchedules.filter(s => s.hari.trim().toLowerCase() === day.toLowerCase()).sort((a, b) => a.waktu.localeCompare(b.waktu));
+                            if (daySchedules.length === 0) return null;
+                            return (
+                              <div key={day} className="day-section">
+                                <h3 style={{fontSize: '12pt', fontWeight: 'bold', marginBottom: '10px', paddingLeft: '10px', borderLeft: '5px solid #000'}}>{day.toUpperCase()}</h3>
+                                <table className="w-full">
+                                  <thead><tr><th style={{width: '15%'}}>WAKTU</th><th style={{width: '35%'}}>MATAKULIAH</th><th style={{width: '25%'}}>DOSEN</th><th style={{width: '10%', textAlign: 'center'}}>KLS</th><th style={{width: '15%', textAlign: 'center'}}>RUANG</th></tr></thead>
+                                  <tbody>
+                                    {daySchedules.map((item) => (
+                                      <tr key={item.id}>
+                                        <td style={{fontWeight: 'bold'}}>{item.waktu}</td>
+                                        <td><div style={{fontWeight: 'bold', fontSize: '9pt'}}>{item.matkul.toUpperCase()}</div><div style={{fontSize: '7.5pt'}}>Semester {item.semester} • {item.sks} SKS</div></td>
+                                        <td style={{fontSize: '8pt'}}>{item.dosen.toUpperCase()}</td>
+                                        <td style={{textAlign: 'center'}}>{item.kelas}</td>
+                                        <td style={{textAlign: 'center', fontWeight: 'bold'}}>{item.ruangan}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            );
+                          })}
+                        </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            </main>
+          </div>
+        </div>
+      );
+    }
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
+
+<!-- Dokumentasi Teknis UMB Manager v1.7
+
+1. Pendahuluan
+UMB Manager v1.7 adalah aplikasi berbasis web (Single Page Application) yang dirancang khusus untuk mengelola jadwal perkuliahan secara dinamis. Aplikasi ini memfasilitasi administrasi jadwal seperti pemindahan jam kuliah, penukaran jadwal antar dosen, serta pemantauan ketersediaan ruangan secara real-time berbasis data statis dari Excel.
+
+2. Arsitektur Teknologi
+
+Aplikasi ini dibangun menggunakan teknologi modern tanpa memerlukan backend server tradisional, memanfaatkan penyimpanan lokal browser:
+Frontend Framework: React 18 (via ESM)
+Styling: Tailwind CSS (Utilitas UI responsif)
+Icons: Lucide-React
+Data Processing: SheetJS (XLSX) untuk membaca dan membuat file Excel.
+Transpiler: Babel (untuk menjalankan JSX di browser).
+Persistence: LocalStorage API.
+
+3. Fitur Utama
+
+A. Dashboard Jadwal
+Visualisasi Kartu: Menampilkan jadwal dalam bentuk kartu yang informatif (Mata Kuliah, Dosen, Kelas, SKS, Semester, Hari, Waktu, dan Ruangan).
+Filter & Pencarian: Fitur pencarian global yang mencakup semua kolom data.
+Sorting Cerdas: Pengurutan berdasarkan Hari (sesuai urutan Senin-Sabtu), Mata Kuliah, Dosen, atau Ruangan.
+Riwayat Cepat: Menampilkan catatan perubahan terakhir langsung pada kartu jadwal jika jadwal tersebut pernah diubah.
+
+B. Cari Ruang Kosong (Scanner)
+Memungkinkan pengguna memilih Hari dan Jam tertentu.
+Sistem akan membagi ruangan menjadi dua kategori:
+Tersedia: Ruangan yang tidak digunakan pada slot waktu tersebut.
+Terisi: Ruangan yang sedang digunakan, lengkap dengan detail mata kuliah dan dosen yang sedang mengajar.
+
+C. Tukar & Pindah (Swap & Move)
+Fitur paling kompleks yang dilengkapi dengan Collision Detection (Deteksi Tabrakan):
+Advanced Swap: Menukar jadwal Dosen A dengan Dosen B. Sistem secara otomatis memvalidasi apakah penukaran tersebut akan menyebabkan jadwal bentrok bagi dosen atau kelas yang bersangkutan.
+Move to Empty Slot: Memindahkan jadwal ke ruangan dan jam yang benar-benar kosong di hari tujuan.
+
+D. Riwayat & Berita Acara (Audit Log)
+Setiap perubahan jadwal wajib menyertakan alasan (Berita Acara).
+Fitur Undo: Tombol satu klik untuk mengembalikan perubahan ke status sebelumnya jika terjadi kesalahan input.
+
+E. Manajemen Data
+Import Excel: Mengunggah file .xlsx untuk mengisi database awal.
+Export Excel: Mengunduh jadwal yang sudah diperbarui kembali ke file Excel.
+Persistence: Data tersimpan secara permanen di browser pengguna melalui localStorage.
+
+4. Logika Bisnis (Collision Detection)
+Sistem keamanan data memastikan tidak ada jadwal yang bentrok dengan aturan:
+Dosen: Seorang dosen tidak boleh mengajar di dua kelas/ruang berbeda pada waktu yang sama.
+Kelas: Sebuah rombel/kelas tidak boleh memiliki dua mata kuliah berbeda di jam yang sama.
+Ruangan: Satu ruangan tidak boleh digunakan oleh dua mata kuliah berbeda di jam yang sama.
+Logika ini dijalankan menggunakan fungsi isOverlap yang membandingkan rentang menit (start - end) dari setiap slot waktu.
+
+5. Konfigurasi Penyimpanan (Storage)
+Aplikasi menggunakan kunci penyimpanan berikut di LocalStorage:
+umb_schedule_v8_7: Menyimpan array objek jadwal.
+umb_history_v8_7: Menyimpan log aktivitas/audit trail.
+umb_admin_v8_7: Menyimpan nama notulis/admin aktif.
+umb_theme_dark: Menyimpan preferensi tema (Light/Dark mode).
+
+6. Panduan Penggunaan Singkat
+Persiapan: Buka aplikasi dan klik tombol "Impor Excel" untuk memasukkan data jadwal awal.
+Identitas: Atur nama Notulis pada sidebar untuk keperluan Berita Acara.
+Pencarian: Gunakan kolom pencarian di header untuk memfilter jadwal secara instan.
+Perubahan: Masuk ke menu "Tukar & Pindah", pilih dosen, pilih matkul, masukkan alasan, dan pilih target penukaran yang divalidasi sistem (berwarna hijau).
+Output: Klik "Ekspor Hasil" untuk mendapatkan file Excel terbaru yang siap didistribusikan.
+Cetak: Gunakan tombol "Cetak Laporan" untuk mendapatkan format PDF/Cetak fisik berstandar A4 yang rapi.
+
+7. Catatan Versi (v1.7)
+Optimalisasi fitur Undo pada riwayat.
+Penambahan fitur pencarian pada daftar ruangan yang terisi.
+Perbaikan urutan hari pada kandidat penukaran jadwal.
+Peningkatan akurasi deteksi bentrok jam kuliah. -->
