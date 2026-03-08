@@ -212,12 +212,12 @@
           'ID': s.id, 'Program Studi': s.prodi, 'Nama Matkul': s.matkul, 'Dosen Pengampu': s.dosen,
           'Kelas': s.kelas, 'Semester': s.semester, 'SKS': s.sks, 'Hari': s.hari, 'Waktu': s.waktu,
           'Ruangan': s.ruangan, 
-          'Log Perubahan': (s.keterangan_rapat && s.keterangan_rapat !== '-') ? `[Notulis: ${adminName}] ${s.keterangan_rapat} (Matkul: ${s.matkul}, Kelas: ${s.kelas})` : '-'
+          'Log Perubahan': (s.keterangan_rapat && s.keterangan_rapat !== '-') ? `[Notulis: ${adminName}] ${s.keterangan_rapat}` : '-'
         }));
         const ws = XLSX.utils.json_to_sheet(dataToExport);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "Jadwal Terkini");
-        const filename = searchTerm ? `Jadwal_Cari_${searchTerm}.xlsx` : `Jadwal_${selectedProdi}_Update.xlsx`;
+        const filename = searchTerm ? `Jadwal_${searchTerm}.xlsx` : `Jadwal_${selectedProdi}_Update.xlsx`;
         XLSX.writeFile(wb, filename);
         setToast(`File Excel berhasil diekspor!`);
       };
@@ -529,7 +529,7 @@
                   { id: 'scanner', label: 'Cari Ruang Kosong', icon: SearchCode },
                   { id: 'swap', label: 'Tukar & Pindah', icon: RefreshCw },
                   { id: 'history', label: 'Riwayat & Berita', icon: FileText },
-                  {id: 'generate', label: 'Generate Jadwal (Cooming)', icon: RefreshCw , status: 'Coming Soon', }
+                  {id: 'generate', label: 'Generate Jadwal (Kamingsun)', icon: RefreshCw , status: 'Coming Soon', }
 
                 ].map((item) => (
                   <button key={item.id} onClick={() => { setActiveMenu(item.id); resetSwapFlow(); }} className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl font-bold text-sm transition-all ${activeMenu === item.id ? 'bg-blue-600 text-white shadow-xl shadow-blue-500/20' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800/50'}`}>
@@ -830,7 +830,7 @@
                     {/* PRINT LAYOUT */}
                     <div className="print-only">
                         <div style={{textAlign: 'center', marginBottom: '30px', borderBottom: '2px solid #000', paddingBottom: '15px'}}>
-                           <div style={{fontSize: '18pt', fontWeight: '900', textTransform: 'uppercase', marginBottom: '5px'}}>{searchTerm ? `HASIL PENCARIAN: ${searchTerm.toUpperCase()}` : `JADWAL KULIAH: ${selectedProdi.toUpperCase()}`}</div>
+                           <div style={{fontSize: '18pt', fontWeight: '900', textTransform: 'uppercase', marginBottom: '5px'}}>{searchTerm ? `JADWAL ${searchTerm.toUpperCase()}` : `JADWAL KULIAH: ${selectedProdi.toUpperCase()}`}</div>
                            <div style={{fontSize: '10pt', color: '#000', fontWeight: 'bold'}}>UNIVERSITAS MUHAMMADIYAH BANDUNG</div>
                            <div style={{fontSize: '8pt', color: '#000'}}>Notulis: {adminName} | Dicetak: {new Date().toLocaleString('id-ID')}</div>
                         </div>
@@ -855,3 +855,4 @@
   </script>
 </body>
 </html>
+
