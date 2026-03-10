@@ -60,7 +60,7 @@
       ChevronRight, Database, MapPin, Calendar, Clock, FileUp, Trash2,
       SortAsc, SortDesc, ArrowUpDown, Download, Printer, SearchCode, 
       FileText, Ban, ArrowRightLeft, Moon, Sun, ArrowLeft, Info, History, RotateCcw, AlertCircle, BellRing, User, ArrowUp,
-      HelpCircle, ExternalLink, AlertTriangle, UploadCloud, Square, CheckSquare, XCircle
+      HelpCircle, ExternalLink, AlertTriangle, UploadCloud, Square, CheckSquare, XCircle, Layers
     } from 'lucide-react';
 
     const DAYS_ORDER = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
@@ -85,21 +85,29 @@
         if (dayA === -1) dayA = 99;
         if (dayB === -1) dayB = 99;
         if (dayA !== dayB) return direction === 'asc' ? dayA - dayB : dayB - dayA;
-        return a.waktu.localeCompare(b.waktu);
+        return (a.waktu || "").localeCompare(b.waktu || "");
       });
     };
 
     const parseTimeToMinutes = (timeStr) => {
-      if (!timeStr || !timeStr.includes(':')) return null;
+      if (!timeStr) return null;
+      const clean = timeStr.trim().replace(/\./g, ':').replace(/\s/g, '');
+      if (!clean.includes(':')) return null;
       try {
-        const parts = timeStr.trim().split(':');
-        return (parseInt(parts[0], 10) * 60) + parseInt(parts[1], 10);
+        const parts = clean.split(':');
+        const h = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10);
+        if (isNaN(h) || isNaN(m)) return null;
+        return (h * 60) + m;
       } catch(e) { return null; }
     };
 
     const getSlotRange = (slotStr) => {
-      if (!slotStr || !slotStr.includes('-')) return null;
-      const parts = slotStr.split('-');
+      if (!slotStr) return null;
+      const separator = slotStr.includes('-') ? '-' : (slotStr.includes('~') ? '~' : null);
+      if (!separator) return null;
+      
+      const parts = slotStr.split(separator);
       const start = parseTimeToMinutes(parts[0]);
       const end = parseTimeToMinutes(parts[1]);
       return (start === null || end === null) ? null : { start, end };
@@ -204,7 +212,6 @@
       const handleDrag = (e) => { e.preventDefault(); e.stopPropagation(); if (e.type === "dragenter" || e.type === "dragover") setDragActive(true); else if (e.type === "dragleave") setDragActive(false); };
       const handleDrop = (e) => { e.preventDefault(); e.stopPropagation(); setDragActive(false); if (e.dataTransfer.files && e.dataTransfer.files[0]) processFile(e.dataTransfer.files[0]); };
 
-      // Revisi 2: Log Excel Lengkap (Matkul & Kelas)
       const downloadUpdatedExcel = () => {
         const toExport = filteredSchedules; 
         if (toExport.length === 0) return;
@@ -284,22 +291,25 @@
 
       const swapSafeCandidates = useMemo(() => {
         if (!swapMatkulAsal) return [];
-        const lecturerAsal = swapDosenAsal;
+        const lecturerAsalNorm = swapDosenAsal.toLowerCase().trim();
         const timeAsal = getSlotRange(swapMatkulAsal.waktu);
-        const dayAsal = swapMatkulAsal.hari;
-        const classAsal = swapMatkulAsal.kelas;
+        const dayAsalNorm = swapMatkulAsal.hari.toLowerCase().trim();
+        const classAsalNorm = swapMatkulAsal.kelas.toLowerCase().trim();
 
         let candidates = schedules.filter(target => 
-          target.prodi === selectedProdi && target.id !== swapMatkulAsal.id && target.waktu !== '-' 
+          target.prodi === selectedProdi && target.id !== swapMatkulAsal.id && (target.waktu && target.waktu !== '-')
         ).filter(target => {
           const timeTuj = getSlotRange(target.waktu);
-          const dayTuj = target.hari;
-          const lecturerTuj = target.dosen;
-          const classTuj = target.kelas;
-          const b1 = schedules.some(s => s.id !== swapMatkulAsal.id && s.id !== target.id && s.dosen === lecturerAsal && s.hari === dayTuj && isOverlap(timeTuj, getSlotRange(s.waktu)));
-          const b2 = schedules.some(s => s.id !== swapMatkulAsal.id && s.id !== target.id && s.dosen === lecturerTuj && s.hari === dayAsal && isOverlap(timeAsal, getSlotRange(s.waktu)));
-          const b3 = schedules.some(s => s.id !== swapMatkulAsal.id && s.id !== target.id && s.kelas === classAsal && s.hari === dayTuj && isOverlap(timeTuj, getSlotRange(s.waktu)));
-          const b4 = schedules.some(s => s.id !== swapMatkulAsal.id && s.id !== target.id && s.kelas === classTuj && s.hari === dayAsal && isOverlap(timeAsal, getSlotRange(s.waktu)));
+          const dayTujNorm = target.hari.toLowerCase().trim();
+          const lecturerTujNorm = target.dosen.toLowerCase().trim();
+          const classTujNorm = target.kelas.toLowerCase().trim();
+
+          // Validasi ketat b1-b4 (Menggunakan Normalisasi Case-Insensitive)
+          const b1 = (timeTuj && dayTujNorm) ? schedules.some(s => s.id !== swapMatkulAsal.id && s.id !== target.id && s.dosen.toLowerCase().trim() === lecturerAsalNorm && s.hari.toLowerCase().trim() === dayTujNorm && isOverlap(timeTuj, getSlotRange(s.waktu))) : false;
+          const b2 = (timeAsal && dayAsalNorm) ? schedules.some(s => s.id !== swapMatkulAsal.id && s.id !== target.id && s.dosen.toLowerCase().trim() === lecturerTujNorm && s.hari.toLowerCase().trim() === dayAsalNorm && isOverlap(timeAsal, getSlotRange(s.waktu))) : false;
+          const b3 = (timeTuj && dayTujNorm) ? schedules.some(s => s.id !== swapMatkulAsal.id && s.id !== target.id && s.kelas.toLowerCase().trim() === classAsalNorm && s.hari.toLowerCase().trim() === dayTujNorm && isOverlap(timeTuj, getSlotRange(s.waktu))) : false;
+          const b4 = (timeAsal && dayAsalNorm) ? schedules.some(s => s.id !== swapMatkulAsal.id && s.id !== target.id && s.kelas.toLowerCase().trim() === classTujNorm && s.hari.toLowerCase().trim() === dayAsalNorm && isOverlap(timeAsal, getSlotRange(s.waktu))) : false;
+          
           return !b1 && !b2 && !b3 && !b4;
         });
 
@@ -314,12 +324,16 @@
         const allRooms = [...new Set(schedules.map(s => s.ruangan.trim()))].filter(r => r && r !== '-' && !r.toLowerCase().includes('online'));
         const targetDaySchedules = schedules.filter(s => s.hari.trim().toLowerCase() === swapTargetDay.trim().toLowerCase());
         const options = [];
+        const lecturerAsalNorm = swapDosenAsal.toLowerCase().trim();
+        const classAsalNorm = swapMatkulAsal.kelas.toLowerCase().trim();
+
         TIMES_SLOTS.forEach(jam => {
           const rangeJam = getSlotRange(jam);
-          if (targetDaySchedules.some(s => s.dosen === swapDosenAsal && isOverlap(rangeJam, getSlotRange(s.waktu)))) return;
-          if (targetDaySchedules.some(s => s.kelas === swapMatkulAsal.kelas && isOverlap(rangeJam, getSlotRange(s.waktu)))) return;
+          // Case insensitive check for Lecturer and Class
+          if (targetDaySchedules.some(s => s.dosen.toLowerCase().trim() === lecturerAsalNorm && isOverlap(rangeJam, getSlotRange(s.waktu)))) return;
+          if (targetDaySchedules.some(s => s.kelas.toLowerCase().trim() === classAsalNorm && isOverlap(rangeJam, getSlotRange(s.waktu)))) return;
           allRooms.forEach(rm => {
-            if (!targetDaySchedules.some(s => s.ruangan === rm && isOverlap(rangeJam, getSlotRange(s.waktu)))) {
+            if (!targetDaySchedules.some(s => s.ruangan.trim() === rm && isOverlap(rangeJam, getSlotRange(s.waktu)))) {
               options.push({ hari: swapTargetDay, waktu: jam, ruangan: rm });
             }
           });
@@ -333,16 +347,23 @@
 
       const executeSwap = (rowTuj) => {
         if (!swapReason.trim()) return;
+        
+        const isDifferentSks = swapMatkulAsal.sks !== rowTuj.sks;
+        const msg = isDifferentSks 
+            ? `⚠️ PERINGATAN: SKS Berbeda (${swapMatkulAsal.sks} vs ${rowTuj.sks}). Menukar jadwal ini mungkin akan mengubah durasi mengajar masing-masing dosen. Lanjutkan?`
+            : `Apakah Anda yakin ingin menukar jadwal [${swapMatkulAsal.matkul}] dengan [${rowTuj.matkul}]?`;
+
         showConfirm(
           "Konfirmasi Penukaran (Swap)",
-          `Apakah Anda yakin ingin menukar jadwal [${swapMatkulAsal.matkul}] dengan [${rowTuj.matkul}]?`,
+          msg,
           () => {
             const ts = new Date().toLocaleString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-            const logAsal = `[${ts}] SWAP: Ditukar dengan ${rowTuj.dosen} (Asal: ${swapMatkulAsal.hari}, ${swapMatkulAsal.waktu}, R: ${swapMatkulAsal.ruangan}) | Alasan: ${swapReason}`;
-            const logTuj = `[${ts}] SWAP: Ditukar dengan ${swapMatkulAsal.dosen} (Asal: ${rowTuj.hari}, ${rowTuj.waktu}, R: ${rowTuj.ruangan}) | Alasan: ${swapReason}`;
+            const sksNote = isDifferentSks ? ` [BEDA SKS: ${swapMatkulAsal.sks} -> ${rowTuj.sks}]` : '';
+            const logAsal = `[${ts}] SWAP${sksNote}: Ditukar dengan ${rowTuj.dosen} (Asal: ${swapMatkulAsal.hari}, ${swapMatkulAsal.waktu}, R: ${swapMatkulAsal.ruangan}) | Alasan: ${swapReason}`;
+            const logTuj = `[${ts}] SWAP${sksNote}: Ditukar dengan ${swapMatkulAsal.dosen} (Asal: ${rowTuj.hari}, ${rowTuj.waktu}, R: ${rowTuj.ruangan}) | Alasan: ${swapReason}`;
             
             const newHistory = {
-              id: Date.now(), type: 'SWAP', admin: adminName, timestamp: ts, reason: swapReason, prodi: selectedProdi,
+              id: Date.now(), type: 'SWAP', admin: adminName, timestamp: ts, reason: swapReason + (isDifferentSks ? " (Perbedaan SKS)" : ""), prodi: selectedProdi,
               affected: [
                 { id: swapMatkulAsal.id, dosen: swapMatkulAsal.dosen, kelas: swapMatkulAsal.kelas, matkul: swapMatkulAsal.matkul, before: {...swapMatkulAsal}, after: { hari: rowTuj.hari, waktu: rowTuj.waktu, ruangan: rowTuj.ruangan, keterangan_rapat: logAsal } },
                 { id: rowTuj.id, dosen: rowTuj.dosen, kelas: rowTuj.kelas, matkul: rowTuj.matkul, before: {...rowTuj}, after: { hari: swapMatkulAsal.hari, waktu: swapMatkulAsal.waktu, ruangan: swapMatkulAsal.ruangan, keterangan_rapat: logTuj } }
@@ -443,9 +464,12 @@
         );
       };
 
-      // Revisi 1: Parse Log tanpa terpotong
       const parseDashboardLog = (fullLog) => {
          if (!fullLog || fullLog === '-') return null;
+         // Ekstrak info (Asal: ...) untuk tampilan ringkas (Revisi 3)
+         const asalMatch = fullLog.match(/\(Asal: .*?\)/);
+         if (asalMatch) return asalMatch[0];
+         
          const parts = fullLog.split(' | Alasan:');
          const typePart = parts[0].split(': ');
          const infoPart = typePart[1] || fullLog;
@@ -488,7 +512,7 @@
                       <div className="bg-amber-100 dark:bg-amber-900/40 text-amber-600 p-3 rounded-2xl"><HelpCircle size={28}/></div>
                       <h3 className="text-xl font-black text-slate-800 dark:text-white uppercase leading-tight">{confirmDialog.title}</h3>
                    </div>
-                   <p className="text-slate-500 dark:text-slate-400 font-bold text-sm leading-relaxed mb-8 uppercase tracking-tight">{confirmDialog.message}</p>
+                   <p className="text-slate-500 dark:text-slate-400 font-bold text-sm leading-relaxed mb-8 uppercase tracking-tight whitespace-pre-line">{confirmDialog.message}</p>
                    <div className="flex gap-3">
                       <button onClick={() => setConfirmDialog({...confirmDialog, open: false})} className="flex-1 py-3.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl font-black text-[10px] uppercase transition-all">Batalkan</button>
                       <button onClick={() => { confirmDialog.onConfirm(); setConfirmDialog({...confirmDialog, open: false}); }} className="flex-1 py-3.5 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg shadow-blue-500/20 transition-all">Ya, Lanjutkan</button>
@@ -528,9 +552,7 @@
                   { id: 'dashboard', label: 'Dashboard Jadwal', icon: LayoutDashboard },
                   { id: 'scanner', label: 'Cari Ruang Kosong', icon: SearchCode },
                   { id: 'swap', label: 'Tukar & Pindah', icon: RefreshCw },
-                  { id: 'history', label: 'Riwayat & Berita', icon: FileText },
-                  {id: 'generate', label: 'Generate Jadwal (Kamingsun)', icon: RefreshCw , status: 'Coming Soon', }
-
+                  { id: 'history', label: 'Riwayat & Berita', icon: FileText }
                 ].map((item) => (
                   <button key={item.id} onClick={() => { setActiveMenu(item.id); resetSwapFlow(); }} className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl font-bold text-sm transition-all ${activeMenu === item.id ? 'bg-blue-600 text-white shadow-xl shadow-blue-500/20' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800/50'}`}>
                     <item.icon size={20} />
@@ -637,25 +659,19 @@
                                 <p className="text-xs font-black text-blue-500 dark:text-blue-400 mt-2 uppercase truncate">{item.dosen}</p>
                               </div>
 
-                              {/* Revisi 1: Dashboard Log tidak terpotong + Detail Button */}
                               {item.keterangan_rapat && item.keterangan_rapat !== '-' && (
                               <div className="mb-4 bg-amber-50/90 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-900/30 p-4 rounded-[1.5rem] flex flex-col gap-3 h-auto min-h-fit">
                                 <div className="flex items-start gap-3 w-full overflow-hidden">
-                                  {/* Icon tetap di posisinya */}
                                   <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-1" />
-                                  
-                                  {/* Container teks dengan min-w-0 agar pembungkusan teks (wrap) berfungsi */}
                                   <div className="flex-1 min-w-0 flex flex-col"> 
                                     <span className="text-[9px] font-black text-amber-700 dark:text-amber-400 uppercase tracking-tight mb-1 block">
-                                      Status Perubahan:
+                                      Jadwal Asal:
                                     </span>
                                     <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200 leading-normal italic whitespace-normal break-words block">
                                       {parseDashboardLog(item.keterangan_rapat)}
                                     </p>
                                   </div>
                                 </div>
-                                
-                                {/* Tombol aksi di bawah teks */}
                                 <button 
                                   onClick={() => setActiveMenu('history')} 
                                   className="w-full flex items-center justify-center gap-2 py-2 bg-white/70 dark:bg-slate-800/60 border border-amber-200 dark:border-amber-900/40 rounded-xl text-[9px] font-black text-blue-600 uppercase hover:bg-white transition-colors shadow-sm"
@@ -677,7 +693,6 @@
 
                     {activeMenu === 'scanner' && (
                       <div className="animate-in space-y-8">
-                        {/* Scanner Logic remains unchanged */}
                         <div className="bg-white dark:bg-slate-900 p-10 rounded-[3.5rem] shadow-sm border dark:border-slate-800">
                           <div className="flex items-center gap-6 mb-10 pb-8 border-b dark:border-slate-800">
                             <div className="bg-blue-600 p-4 rounded-3xl text-white shadow-lg"><SearchCode size={32} /></div>
@@ -726,7 +741,6 @@
 
                     {activeMenu === 'swap' && (
                       <div className="animate-in space-y-6">
-                         {/* Swap Logic remains unchanged */}
                         <div className="bg-white dark:bg-slate-900 p-8 rounded-[3.5rem] shadow-sm border dark:border-slate-800">
                           <div className="flex items-center justify-between mb-8 pb-6 border-b dark:border-slate-800">
                              <div className="flex items-center gap-4"><div className="bg-orange-500 p-3 rounded-2xl text-white shadow-lg"><RefreshCw size={24} /></div><div><h2 className="text-2xl font-black text-slate-800 dark:text-white uppercase leading-none">Tukar & Pindah Jadwal</h2></div></div>
@@ -734,24 +748,127 @@
                           </div>
                           {swapMode === 'menu' && (
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                              <button onClick={() => setSwapMode('advanced-swap')} className="group p-10 bg-slate-50 dark:bg-slate-800 border-2 border-transparent hover:border-blue-500 rounded-[3rem] transition-all text-left"><div className="bg-blue-600 w-14 h-14 rounded-2xl flex items-center justify-center text-white mb-6 shadow-xl"><ArrowRightLeft size={28} /></div><h3 className="text-xl font-black text-slate-800 dark:text-white uppercase">Advanced Swap</h3><p className="text-xs font-bold text-slate-500 mt-2">Menukar satu jadwal dengan jadwal lain.</p></button>
+                              <button onClick={() => setSwapMode('advanced-swap')} className="group p-10 bg-slate-50 dark:bg-slate-800 border-2 border-transparent hover:border-blue-500 rounded-[3rem] transition-all text-left"><div className="bg-blue-600 w-14 h-14 rounded-2xl flex items-center justify-center text-white mb-6 shadow-xl"><ArrowRightLeft size={28} /></div><h3 className="text-xl font-black text-slate-800 dark:text-white uppercase">Advanced Swap</h3><p className="text-xs font-bold text-slate-500 mt-2">Menukar satu jadwal dengan jadwal lain (Auto-Detect SKS).</p></button>
                               <button onClick={() => setSwapMode('move')} className="group p-10 bg-slate-50 dark:bg-slate-800 border-2 border-transparent hover:border-emerald-500 rounded-[3rem] transition-all text-left"><div className="bg-emerald-600 w-14 h-14 rounded-2xl flex items-center justify-center text-white mb-6 shadow-xl"><FileUp size={28} /></div><h3 className="text-xl font-black text-slate-800 dark:text-white uppercase">Move to Empty Slot</h3><p className="text-xs font-bold text-slate-500 mt-2">Memindahkan jadwal ke slot hari yang kosong.</p></button>
                             </div>
                           )}
                           {swapMode !== 'menu' && (
                             <div className="space-y-8 animate-in">
-                              <div className="flex items-center gap-4 px-4">{[{ s: 1, label: "Pilih Dosen" }, { s: 2, label: "Matkul Asal" }, { s: 3, label: swapMode === 'advanced-swap' ? "Matkul Swap" : "Slot Kosong" }].map((step) => (<div key={step.s} className="flex items-center gap-2"><div className={`w-10 h-10 rounded-full flex items-center justify-center text-xs font-black transition-all ${swapStep >= step.s ? 'bg-blue-600 text-white shadow-lg' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>{step.s}</div><span className={`text-[9px] font-black uppercase tracking-tighter ${swapStep === step.s ? 'text-blue-600' : 'text-slate-400'}`}>{step.label}</span>{step.s < 3 && <div className={`w-8 h-0.5 rounded ${swapStep > step.s ? 'bg-blue-600' : 'bg-slate-100 dark:bg-slate-800'}`}></div>}</div>))}</div>
-                              {swapStep === 1 && (<div className="animate-in grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">{[...new Set(schedules.filter(s => s.prodi === selectedProdi).map(s => s.dosen))].sort().map(dosen => (<button key={dosen} onClick={() => { setSwapDosenAsal(dosen); setSwapStep(2); }} className="p-5 bg-slate-50 dark:bg-slate-800 border dark:border-slate-800 rounded-3xl text-left hover:border-blue-500 transition-all uppercase text-xs font-black text-slate-800 dark:text-white truncate">{dosen}</button>))}</div>)}
-                              {swapStep === 2 && (<div className="animate-in grid grid-cols-1 md:grid-cols-2 gap-4">{sortSchedulesByDay(schedules.filter(s => s.dosen === swapDosenAsal && s.prodi === selectedProdi)).map(item => (<button key={item.id} onClick={() => { setSwapMatkulAsal(item); setSwapStep(3); }} className="p-8 bg-white dark:bg-slate-800 border-2 border-transparent hover:border-blue-500 rounded-[2.5rem] shadow-sm text-left group"><div className="flex justify-between mb-2"><span className="text-[10px] font-black text-blue-600 bg-blue-50 dark:bg-blue-900/40 px-2 py-0.5 rounded-md uppercase">{item.hari}</span></div><h5 className="font-black text-slate-800 dark:text-white text-base leading-tight uppercase group-hover:text-blue-600">{item.matkul}</h5><div className="mt-4 text-[11px] font-bold text-slate-400 uppercase tracking-tight flex items-center gap-4"><span>{item.waktu}</span><span className="bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded-lg">R: {item.ruangan}</span></div></button>))}</div>)}
+                              {/* --- BREADCRUMBS / STEP HEADER --- */}
+                              <div className="flex flex-col md:flex-row items-start md:items-center gap-6 px-4">
+                                {[
+                                  { s: 1, label: "Pilih Dosen", val: swapStep > 1 ? swapDosenAsal : null }, 
+                                  { s: 2, label: "Matkul Asal", val: swapStep > 2 ? `${swapMatkulAsal?.matkul} (${swapMatkulAsal?.kelas})` : null }, 
+                                  { s: 3, label: swapMode === 'advanced-swap' ? "Matkul Swap" : "Slot Kosong" }
+                                ].map((step) => (
+                                  <div key={step.s} className="flex flex-col gap-1 min-w-[120px]">
+                                    <div className="flex items-center gap-2">
+                                      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-black transition-all ${swapStep >= step.s ? 'bg-blue-600 text-white shadow-lg' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>{step.s}</div>
+                                      <span className={`text-[9px] font-black uppercase tracking-widest ${swapStep === step.s ? 'text-blue-600' : 'text-slate-400'}`}>{step.label}</span>
+                                      {step.s < 3 && <div className={`hidden md:block w-8 h-0.5 rounded ml-2 ${swapStep > step.s ? 'bg-blue-600' : 'bg-slate-100 dark:bg-slate-800'}`}></div>}
+                                    </div>
+                                    {step.val && (
+                                      <div className="ml-10 text-[10px] font-bold text-blue-500 dark:text-blue-400 uppercase tracking-tighter truncate max-w-[180px] animate-in">
+                                        {step.val}
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                              
+                              {/* --- STEP 1: PILIH DOSEN --- */}
+                              {swapStep === 1 && (
+                                <div className="animate-in grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                                  {[...new Set(schedules.filter(s => s.prodi === selectedProdi).map(s => s.dosen))].sort().map(dosen => (
+                                    <button key={dosen} onClick={() => { setSwapDosenAsal(dosen); setSwapStep(2); }} className="p-5 bg-slate-50 dark:bg-slate-800 border dark:border-slate-800 rounded-3xl text-left hover:border-blue-500 transition-all uppercase text-xs font-black text-slate-800 dark:text-white truncate">
+                                      {dosen}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                              
+                              {/* --- STEP 2: PILIH MATKUL ASAL --- */}
+                              {swapStep === 2 && (
+                                <div className="animate-in grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  {sortSchedulesByDay(schedules.filter(s => s.dosen === swapDosenAsal && s.prodi === selectedProdi)).map(item => (
+                                    <button key={item.id} onClick={() => { setSwapMatkulAsal(item); setSwapStep(3); }} className="p-8 bg-white dark:bg-slate-800 border-2 border-transparent hover:border-blue-500 rounded-[2.5rem] shadow-sm text-left group">
+                                      <div className="flex justify-between mb-2">
+                                        <span className="text-[10px] font-black text-blue-600 bg-blue-50 dark:bg-blue-900/40 px-2 py-0.5 rounded-md uppercase">{item.hari}</span>
+                                        <div className="flex gap-2">
+                                          <span className="text-[10px] font-black text-slate-400 bg-slate-100 dark:bg-slate-700 px-2 py-0.5 rounded-md uppercase tracking-tight">{item.kelas}</span>
+                                          <span className="text-[10px] font-black text-violet-600">{item.sks} SKS</span>
+                                        </div>
+                                      </div>
+                                      <h5 className="font-black text-slate-800 dark:text-white text-base leading-tight uppercase group-hover:text-blue-600">{item.matkul}</h5>
+                                      <div className="mt-4 text-[11px] font-bold text-slate-400 uppercase tracking-tight flex items-center gap-4">
+                                        <span>{item.waktu}</span>
+                                        <span className="bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded-lg">R: {item.ruangan}</span>
+                                      </div>
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                              
+                              {/* --- STEP 3: PILIH TARGET (SWAP/MOVE) --- */}
                               {swapStep === 3 && (
                                 <div className="animate-in space-y-8">
-                                  <div className="flex flex-col md:flex-row gap-4"><div className="flex-1 p-6 bg-orange-50 dark:bg-orange-500/10 rounded-[2rem] border-2 border-orange-100 dark:border-orange-500/20"><p className="text-[10px] font-black text-orange-600 uppercase mb-2">Asal Jadwal:</p><h5 className="text-base font-black text-slate-800 dark:text-white uppercase leading-tight line-clamp-1">{swapMatkulAsal.matkul}</h5><p className="text-[10px] font-bold text-slate-500 mt-1">{swapMatkulAsal.hari}, {swapMatkulAsal.waktu} [{swapMatkulAsal.ruangan}]</p></div><div className="flex-1 p-6 bg-white dark:bg-slate-900 rounded-[2rem] border-2 border-slate-200 dark:border-slate-800"><p className="text-[10px] font-black text-blue-600 uppercase mb-2">Berita Acara / Alasan:</p><textarea rows="2" value={swapReason} onChange={(e) => setSwapReason(e.target.value)} placeholder="Tulis alasan perubahan..." className="w-full bg-slate-50 dark:bg-slate-800 border-none px-4 py-3 rounded-xl text-xs font-bold outline-none resize-none dark:text-white" /></div></div>
-                                  <div className="space-y-6"><div className="p-6 bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-[2rem] flex flex-wrap gap-2">{['Semua', ...DAYS_ORDER].map(d => (<button key={d} onClick={() => { swapMode === 'advanced-swap' ? setSwapDayFilter(d) : setSwapTargetDay(d) }} className={`px-5 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${(swapMode === 'advanced-swap' ? swapDayFilter : swapTargetDay) === d ? 'bg-blue-600 text-white shadow-md' : 'bg-slate-50 dark:bg-slate-800 text-slate-400'}`}>{d}</button>))}</div>
-                                      {swapMode === 'advanced-swap' ? (
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">{swapSafeCandidates.map(target => (<button key={target.id} disabled={!swapReason.trim()} onClick={() => executeSwap(target)} className="p-6 bg-white dark:bg-slate-900 border-2 border-emerald-50 hover:border-emerald-500 rounded-[2rem] text-left transition-all disabled:opacity-30 group shadow-sm"><div className="flex justify-between items-start mb-2"><span className="text-[10px] font-black text-blue-600 bg-blue-50 dark:bg-blue-900/40 px-2 py-0.5 rounded-md uppercase">{target.hari}</span><span className="text-[9px] font-bold text-slate-400 uppercase">{target.kelas}</span></div><h5 className="font-black text-slate-800 dark:text-white text-sm uppercase leading-tight group-hover:text-emerald-600 line-clamp-1">{target.matkul}</h5><p className="text-[10px] font-bold text-slate-500 mt-0.5 truncate">{target.dosen}</p><div className="mt-4 pt-4 border-t dark:border-slate-800 text-[10px] font-black text-slate-400 uppercase">{target.waktu} [{target.ruangan}]</div></button>))}</div>
-                                      ) : (
-                                        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3 max-h-96 overflow-y-auto pr-2 custom-scrollbar">{moveOptions.map((opt, i) => (<button key={i} disabled={!swapReason.trim()} onClick={() => executeMove(opt)} className="p-4 bg-white dark:bg-slate-900 border-2 border-slate-50 dark:border-slate-800 rounded-3xl text-center hover:border-emerald-500 transition-all disabled:opacity-30 group shadow-sm"><p className="text-[9px] font-black text-slate-400 mb-1 group-hover:text-emerald-600">{opt.waktu}</p><p className="text-sm font-black text-slate-800 dark:text-white uppercase">{opt.ruangan}</p></button>))}</div>
-                                      )}
+                                  {/* DETAIL PILIHAN ASAL */}
+                                  <div className="flex flex-col md:flex-row gap-4">
+                                    <div className="flex-1 p-6 bg-orange-50 dark:bg-orange-500/10 rounded-[2rem] border-2 border-orange-100 dark:border-orange-500/20">
+                                      <p className="text-[10px] font-black text-orange-600 uppercase mb-2">Asal Jadwal ({swapMatkulAsal.sks} SKS):</p>
+                                      <h5 className="text-base font-black text-slate-800 dark:text-white uppercase leading-tight line-clamp-1">{swapMatkulAsal.matkul} ({swapMatkulAsal.kelas})</h5>
+                                      <p className="text-[10px] font-bold text-slate-500 mt-1">{swapMatkulAsal.hari}, {swapMatkulAsal.waktu} [{swapMatkulAsal.ruangan}]</p>
+                                    </div>
+                                    <div className="flex-1 p-6 bg-white dark:bg-slate-900 rounded-[2rem] border-2 border-slate-200 dark:border-slate-800">
+                                      <p className="text-[10px] font-black text-blue-600 uppercase mb-2">Berita Acara / Alasan:</p>
+                                      <textarea rows="2" value={swapReason} onChange={(e) => setSwapReason(e.target.value)} placeholder="Tulis alasan perubahan..." className="w-full bg-slate-50 dark:bg-slate-800 border-none px-4 py-3 rounded-xl text-xs font-bold outline-none resize-none dark:text-white" />
+                                    </div>
+                                  </div>
+
+                                  <div className="space-y-6">
+                                    <div className="p-6 bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-[2rem] flex flex-wrap gap-2">
+                                      {['Semua', ...DAYS_ORDER].map(d => (
+                                        <button key={d} onClick={() => { swapMode === 'advanced-swap' ? setSwapDayFilter(d) : setSwapTargetDay(d) }} className={`px-5 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${(swapMode === 'advanced-swap' ? swapDayFilter : swapTargetDay) === d ? 'bg-blue-600 text-white shadow-md' : 'bg-slate-50 dark:bg-slate-800 text-slate-400'}`}>
+                                          {d}
+                                        </button>
+                                      ))}
+                                    </div>
+
+                                    {swapMode === 'advanced-swap' ? (
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        {swapSafeCandidates.length > 0 ? swapSafeCandidates.map(target => {
+                                          const isDiffSks = target.sks !== swapMatkulAsal.sks;
+                                          return (
+                                            <button key={target.id} disabled={!swapReason.trim()} onClick={() => executeSwap(target)} className={`p-6 bg-white dark:bg-slate-900 border-2 ${isDiffSks ? 'border-amber-200 dark:border-amber-900/40' : 'border-emerald-50'} hover:border-emerald-500 rounded-[2rem] text-left transition-all disabled:opacity-30 group shadow-sm`}>
+                                              <div className="flex justify-between items-start mb-2">
+                                                <div className="flex gap-2">
+                                                  <span className="text-[10px] font-black text-blue-600 bg-blue-50 dark:bg-blue-900/40 px-2 py-0.5 rounded-md uppercase">{target.hari}</span>
+                                                  <span className="text-[10px] font-black text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md uppercase tracking-tighter">{target.kelas}</span>
+                                                  {isDiffSks && <span className="text-[9px] font-black text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md uppercase ring-1 ring-amber-200">BEDA SKS</span>}
+                                                </div>
+                                                <span className="text-[9px] font-bold text-slate-400 uppercase">{target.sks} SKS</span>
+                                              </div>
+                                              <h5 className="font-black text-slate-800 dark:text-white text-sm uppercase leading-tight group-hover:text-emerald-600 line-clamp-1">{target.matkul}</h5>
+                                              <p className="text-[10px] font-bold text-slate-500 mt-0.5 truncate">{target.dosen}</p>
+                                              <div className="mt-4 pt-4 border-t dark:border-slate-800 text-[10px] font-black text-slate-400 uppercase">{target.waktu} [{target.ruangan}]</div>
+                                            </button>
+                                          )
+                                        }) : (
+                                          <div className="col-span-full py-10 text-center opacity-40 uppercase font-black text-xs italic tracking-widest">Tidak ada kandidat swap yang aman secara bentrok</div>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3 max-h-96 overflow-y-auto pr-2 custom-scrollbar">
+                                        {moveOptions.length > 0 ? moveOptions.map((opt, i) => (
+                                          <button key={i} disabled={!swapReason.trim()} onClick={() => executeMove(opt)} className="p-4 bg-white dark:bg-slate-900 border-2 border-slate-50 dark:border-slate-800 rounded-3xl text-center hover:border-emerald-500 transition-all disabled:opacity-30 group shadow-sm">
+                                            <p className="text-[9px] font-black text-slate-400 mb-1 group-hover:text-emerald-600">{opt.waktu}</p>
+                                            <p className="text-sm font-black text-slate-800 dark:text-white uppercase">{opt.ruangan}</p>
+                                          </button>
+                                        )) : (
+                                          <div className="col-span-full py-10 text-center opacity-40 uppercase font-black text-xs italic tracking-widest">Tidak ada slot kosong yang tersedia</div>
+                                        )}
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
                               )}
@@ -772,7 +889,6 @@
                                  <p className="text-slate-500 font-bold text-[10px] uppercase mt-2">Log Audit Pengelolaan Jadwal Kuliah</p>
                                </div>
                              </div>
-                             {/* Revisi 3: Tombol Multi Undo & Uncheck All */}
                              {selectedHistoryIds.length > 0 && (
                                 <div className="flex items-center gap-2 animate-in">
                                    <button onClick={() => setSelectedHistoryIds([])} className="flex items-center gap-2 px-5 py-3 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl font-black text-[10px] uppercase hover:bg-slate-200 transition-all">
@@ -812,8 +928,22 @@
                                         <h4 className="text-xs font-black text-slate-800 dark:text-white uppercase leading-tight truncate">{aff.matkul}</h4>
                                         <p className="text-[10px] font-bold text-slate-500 uppercase mt-1 truncate">{aff.dosen}</p>
                                         <div className="mt-4 pt-4 border-t dark:border-slate-800 grid grid-cols-2 gap-4">
-                                          <div><p className="text-[8px] font-black text-slate-400 uppercase">Awal:</p><p className="text-[10px] font-bold text-slate-500 line-through leading-tight">{aff.before.hari}, {aff.before.waktu}</p><p className="text-[9px] font-black text-slate-400 uppercase mt-1">R: {aff.before.ruangan}</p></div>
-                                          <div><p className="text-[8px] font-black text-emerald-600 uppercase">Baru:</p><p className="text-[10px] font-black text-emerald-600 leading-tight">{aff.after.hari}, {aff.after.waktu}</p><p className="text-[9px] font-black text-emerald-600 uppercase mt-1">R: {aff.after.ruangan}</p></div>
+                                          <div>
+                                            <p className="text-[8px] font-black text-slate-400 uppercase">Awal:</p>
+                                            <p className="text-[10px] font-bold text-slate-500 line-through leading-tight">{aff.before.hari}, {aff.before.waktu}</p>
+                                            <div className="mt-1 flex gap-2 items-center">
+                                              <span className="text-[9px] font-black text-slate-400 uppercase tracking-tight">R: {aff.before.ruangan}</span>
+                                              <span className="text-[8px] font-bold text-slate-300 bg-slate-100 dark:bg-slate-800 px-1 rounded uppercase">{aff.before.sks} SKS</span>
+                                            </div>
+                                          </div>
+                                          <div>
+                                            <p className="text-[8px] font-black text-emerald-600 uppercase">Baru:</p>
+                                            <p className="text-[10px] font-black text-emerald-600 leading-tight">{aff.after.hari}, {aff.after.waktu}</p>
+                                            <div className="mt-1 flex gap-2 items-center">
+                                              <span className="text-[9px] font-black text-emerald-600 uppercase tracking-tight">R: {aff.after.ruangan}</span>
+                                              <span className="text-[8px] font-bold text-emerald-400 bg-emerald-50 dark:bg-emerald-900/40 px-1 rounded uppercase">{aff.before.sks} SKS</span>
+                                            </div>
+                                          </div>
                                         </div>
                                       </div>
                                     ))}
@@ -827,7 +957,6 @@
                       </div>
                     )}
 
-                    {/* PRINT LAYOUT */}
                     <div className="print-only">
                         <div style={{textAlign: 'center', marginBottom: '30px', borderBottom: '2px solid #000', paddingBottom: '15px'}}>
                            <div style={{fontSize: '18pt', fontWeight: '900', textTransform: 'uppercase', marginBottom: '5px'}}>{searchTerm ? `JADWAL ${searchTerm.toUpperCase()}` : `JADWAL KULIAH: ${selectedProdi.toUpperCase()}`}</div>
@@ -855,4 +984,3 @@
   </script>
 </body>
 </html>
-
