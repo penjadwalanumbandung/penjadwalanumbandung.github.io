@@ -12,6 +12,13 @@
     }
   </script>
   <style>
+    @keyframes bounce-subtle {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-3px); }
+    }
+    .animate-bounce-subtle {
+      animation: bounce-subtle 2s infinite ease-in-out;
+    }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
     @keyframes bounce-slow { 0%, 100% { transform: translateY(-5%); } 50% { transform: translateY(0); } }
     @keyframes scaleIn { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
@@ -67,9 +74,12 @@
       LayoutDashboard, RefreshCw, Search, Menu, X, UserCog, Check,
       ChevronRight, Database, MapPin, Calendar, Clock, FileUp, Trash2,
       SortAsc, SortDesc, ArrowUpDown, Download, Printer, SearchCode, 
-      FileText, Ban, ArrowRightLeft, Moon, Sun, ArrowLeft, Info, History, RotateCcw, AlertCircle, BellRing, User, ArrowUp,
-      HelpCircle, ExternalLink, AlertTriangle, UploadCloud, Square, CheckSquare, XCircle, Layers, Lock, Unlock, LogOut, Wifi, WifiOff,
-      BarChart3, Users2, Building2
+      FileText, Ban, ArrowRightLeft, Moon, Sun, ArrowLeft, Info, History, 
+      RotateCcw, AlertCircle, BellRing, User, ArrowUp, HelpCircle, 
+      ExternalLink, AlertTriangle, UploadCloud, Square, CheckSquare, 
+      XCircle, Layers, Lock, Unlock, LogOut, Wifi, WifiOff, BarChart3, 
+      Users2, Building2, Copy, ChevronDown, ChevronUp, Pencil, 
+      SortAsc as SortIcon // Alias untuk ikon sort
     } from 'lucide-react';
 
     // --- GLOBAL SAFETY CONFIG ---
@@ -159,7 +169,12 @@
       const [schedules, setSchedules] = useState([]);
       const [historyLog, setHistoryLog] = useState([]);
       const [isLoadingData, setIsLoadingData] = useState(true);
-      
+      // State untuk panel sidebar
+      const [isPasscodeExpanded, setIsPasscodeExpanded] = useState(false);
+
+      // State untuk modal edit passcode Admin
+      const [showAdminEditModal, setShowAdminEditModal] = useState(false);
+      const [adminEditData, setAdminEditData] = useState({ prodi: '', oldCode: '', newCode: '' });
       const [selectedProdi, setSelectedProdi] = useState(() => localStorage.getItem(PRODI_KEY) || '');
       const [searchTerm, setSearchTerm] = useState('');
       const [occupiedSearch, setOccupiedSearch] = useState('');
@@ -167,6 +182,10 @@
       const [scanConfig, setScanConfig] = useState({ hari: 'Senin', waktu: '07:00-09:30' });
       const [sortConfig, setSortConfig] = useState({ key: 'hari', direction: 'asc' });
       const [toast, setToast] = useState(null);
+      const [cloudPasscodeMap, setCloudPasscodeMap] = useState(null);
+      const [showPasswordModal, setShowPasswordModal] = useState(false);
+      const [newPasscodeData, setNewPasscodeData] = useState({ old: '', new: '' });
+      const [isConfigLoading, setIsConfigLoading] = useState(true);
       const [dragActive, setDragActive] = useState(false);
       const [selectedHistoryIds, setSelectedHistoryIds] = useState([]);
       
@@ -204,10 +223,7 @@
         keterangan: 'Reguler'
       });
 
-      const [cloudPasscodeMap, setCloudPasscodeMap] = useState(null);
-      const [showPasswordModal, setShowPasswordModal] = useState(false);
-      const [newPasscodeData, setNewPasscodeData] = useState({ old: '', new: '' });
-      const [isConfigLoading, setIsConfigLoading] = useState(true);
+      
 
       // --- INITIAL AUTH ---
       useEffect(() => {
@@ -242,11 +258,12 @@
         };
       }, []);
 
-      // --- FIRESTORE REAL-TIME SYNC (FIXED) ---
+      // --- FIRESTORE REAL-TIME SYNC (FIXED & COMPLETE) ---
       useEffect(() => {
         if (!user) return; // Tunggu sampai login anonim Firebase selesai
 
         setIsLoadingData(true);
+        if (typeof setSyncStatus === 'function') setSyncStatus('Sinkronisasi...');
         
         // 1. Path Konfigurasi Passcode
         const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'passcodes');
@@ -254,46 +271,56 @@
         // 2. Path Koleksi Jadwal
         const schedulesCol = collection(db, 'artifacts', appId, 'public', 'data', 'schedules');
 
-        // Listener Config (Passcode)
+        // 3. Path Koleksi Riwayat & BAP
+        const historyCol = collection(db, 'artifacts', appId, 'public', 'data', 'history');
+
+        // --- Listener Config (Passcode) ---
         const unsubConfig = onSnapshot(configRef, (docSnap) => {
           if (docSnap.exists()) {
             setCloudPasscodeMap(docSnap.data().map);
           } else {
-            setCloudPasscodeMap({}); // Map kosong jika belum ada data di cloud
+            setCloudPasscodeMap({}); 
           }
-          setIsConfigLoading(false);
+          if (typeof setIsConfigLoading === 'function') setIsConfigLoading(false);
         }, (err) => {
           console.error("Config Error:", err);
-          setIsConfigLoading(false);
+          if (typeof setIsConfigLoading === 'function') setIsConfigLoading(false);
         });
 
-        // Listener Jadwal (Schedules)
+        // --- Listener Jadwal (Schedules) ---
         const unsubSchedules = onSnapshot(schedulesCol, (snapshot) => {
           const data = snapshot.docs.map(doc => doc.data());
           setSchedules(data);
           
-          // Matikan loading screen segera setelah data jadwal diterima
           setIsLoadingData(false); 
-          
-          if (typeof setTotalCloudData === 'function') {
-            setTotalCloudData(snapshot.size);
-          }
-          if (typeof setSyncStatus === 'function') {
-            setSyncStatus('Sinkron');
-          }
+          if (typeof setTotalCloudData === 'function') setTotalCloudData(snapshot.size);
+          if (typeof setSyncStatus === 'function') setSyncStatus('Sinkron');
         }, (err) => {
           console.error("Schedules Error:", err);
-          setIsLoadingData(false); // Tetap matikan loading meski error agar bisa "Bypass"
-          if (typeof setSyncStatus === 'function') {
-            setSyncStatus('Error');
-          }
+          setIsLoadingData(false);
+          if (typeof setSyncStatus === 'function') setSyncStatus('Error');
         });
 
+        // --- Listener Riwayat & BAP (TAMBAHKAN INI) ---
+        const unsubHistory = onSnapshot(historyCol, (snapshot) => {
+          const logs = snapshot.docs.map(doc => ({
+            docId: doc.id,
+            ...doc.data()
+          })).sort((a, b) => (b.id || 0) - (a.id || 0)); // Sortir terbaru di atas
+          
+          setHistoryLog(logs);
+          console.log("Riwayat Sync Berhasil:", logs.length, "item");
+        }, (err) => {
+          console.error("History Error:", err);
+        });
+
+        // --- ATURAN CLEANUP (WAJIB) ---
         return () => {
           unsubConfig();
           unsubSchedules();
+          unsubHistory(); // Pastikan history juga di-unsub
         };
-      }, [user, appId]); // Pastikan dependensi lengkap
+      }, [user, appId]);
 
       // Login Persistence
       useEffect(() => {
@@ -436,33 +463,67 @@
         }
       };
 
-      
-      const handleChangePasscode = async () => {
-        if (!authorizedProdi || !cloudPasscodeMap) return;
-        if (newPasscodeData.new.length < 4) return setToast("⚠️ Min. 4 Karakter!");
+      const handleAdminUpdatePasscode = async () => {
+        if (!adminEditData.prodi || adminEditData.newCode.length < 4) {
+          return setToast("⚠️ Passcode baru minimal 4 karakter!");
+        }
 
         const updatedMap = { ...cloudPasscodeMap };
+        const oldKey = Object.keys(updatedMap).find(k => updatedMap[k] === adminEditData.prodi);
+        if (oldKey) delete updatedMap[oldKey];
+        updatedMap[adminEditData.newCode] = adminEditData.prodi;
+
+        try {
+          const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'passcodes');
+          await setDoc(configRef, { 
+            map: updatedMap, 
+            updatedAt: new Date().toISOString(),
+            lastEditor: "SUPER_ADMIN" 
+          });
+          
+          setToast(`✅ Passcode ${adminEditData.prodi} diperbarui!`);
+          setShowAdminEditModal(false);
+        } catch (e) {
+          setToast("❌ Gagal update ke Cloud.");
+        }
+      };
+
+      const handleChangePasscode = async () => {
+        if (!authorizedProdi || !cloudPasscodeMap) return;
+        if (newPasscodeData.new.length < 4) return setToast("⚠️ Passcode baru minimal 4 karakter!");
+
+        const updatedMap = { ...cloudPasscodeMap };
+        
+        // Cari kunci (passcode) lama yang saat ini digunakan prodi ini
         const oldKey = Object.keys(updatedMap).find(k => updatedMap[k] === authorizedProdi);
 
+        // Verifikasi passcode lama (Kecuali Super Admin bisa bypass jika perlu, 
+        // tapi di sini kita wajibkan demi keamanan)
         if (authorizedProdi !== 'SUPER_ADMIN' && newPasscodeData.old !== oldKey) {
           return setToast("❌ Passcode lama salah!");
         }
 
+        // Proses Tukar Kunci: Hapus yang lama, masukkan yang baru
         delete updatedMap[oldKey];
         updatedMap[newPasscodeData.new] = authorizedProdi;
 
         try {
-          await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'config', 'passcodes'), {
-            map: updatedMap,
-            updatedAt: new Date().toISOString()
+          const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'passcodes');
+          await setDoc(configRef, { 
+            map: updatedMap, 
+            updatedAt: new Date().toISOString(),
+            lastEditor: authorizedProdi 
           });
-          setToast("✅ Berhasil Diperbarui!");
+          
+          setToast("✅ Passcode Berhasil Diperbarui di Cloud!");
           setShowPasswordModal(false);
           setNewPasscodeData({ old: '', new: '' });
         } catch (e) {
-          setToast("❌ Gagal Simpan ke Cloud.");
+          console.error(e);
+          setToast("❌ Gagal menyimpan ke Cloud.");
         }
       };
+
 
       const handleLogout = () => {
         setAuthorizedProdi(null);
@@ -799,35 +860,33 @@
 
       const handleAddManual = async () => {
         if (authorizedProdi !== 'SUPER_ADMIN') return;
-
-        // Validasi: Matkul, Ruangan, Dosen, dan Prodi wajib diisi
-        if (!formData.matkul || !formData.ruangan || !formData.dosen || !formData.prodi) {
-          return setToast("⚠️ Mohon lengkapi Matkul, Dosen, Ruangan, dan Program Studi!");
+        
+        // Validasi kolom wajib
+        if (!formData.matkul || !formData.ruangan || !formData.dosen || !formData.prodi || !formData.kode_matkul) {
+          return setToast("⚠️ Kode Matkul, Nama Matkul, Dosen, Ruangan, dan Prodi wajib diisi!");
         }
         
         const manualId = `manual-${Date.now()}`;
-        const prodiTujuan = formData.prodi; // Mengambil dari pilihan di form
-        
-        const newItem = {
-          ...formData,
-          id: manualId,
-          prodi: prodiTujuan,
-          keterangan_rapat: `[INPUT MANUAL] [GENAP 25/26] Ditambahkan oleh SUPER ADMIN (${adminName}) pada ${new Date().toLocaleString('id-ID')}`
+        const newItem = { 
+          ...formData, 
+          id: manualId, 
+          keterangan_rapat: `[INPUT MANUAL] ditambahkan pada ${new Date().toLocaleString('id-ID')}` 
         };
 
         try {
-          setSyncStatus('Mengupload...'); // Tanda proses dimulai
-          await saveToCloud('schedules', manualId, newItem);
-          setToast(`✅ Berhasil! Jadwal ${formData.matkul} ditambahkan.`);
+          await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'schedules', manualId), newItem);
+          setToast("✅ Jadwal berhasil ditambahkan ke Cloud!");
           setShowAddModal(false);
           
-          setFormData({
-            kode_matkul: '', matkul: '', sks: '2', semester: '2', dosen: '',
-            hari: 'Senin', waktu: '07:00-08:40', kelas: '', ruangan: '', prodi: '', fakultas: '', keterangan: 'Reguler'
+          // Reset Form ke default
+          setFormData({ 
+            kode_matkul: '', matkul: '', sks: '2', semester: '2', dosen: '', 
+            hari: 'Senin', waktu: '07:00-08:40', kelas: '', ruangan: '', 
+            prodi: '', fakultas: '', keterangan: 'Reguler' 
           });
         } catch (err) {
-          setSyncStatus('Gagal');
-          setToast("❌ Gagal menyimpan ke Cloud.");
+          console.error(err);
+          setToast("❌ Gagal menyimpan.");
         }
       };
 
@@ -951,7 +1010,7 @@
 
           {/* IMPROVED TOAST: Fixed cutting off issue */}
           {toast && (
-            <div className="fixed top-8 left-1/2 -translate-x-1/2 z-[500] animate-in w-auto max-w-[90vw]">
+            <div className="fixed top-8 left-1/2 -translate-x-1/2 z-[10000] animate-in w-auto max-w-[90vw]">
               <div className="bg-slate-900 dark:bg-blue-600 text-white px-5 py-3.5 rounded-2xl shadow-2xl flex items-center gap-3 border border-white/10 backdrop-blur-md">
                 <BellRing size={18} className="shrink-0 text-blue-200 dark:text-white/80"/>
                 <p className="text-[10px] sm:text-xs font-black uppercase tracking-widest leading-relaxed break-words">
@@ -961,7 +1020,70 @@
             </div>
           )}
 
-          {confirmDialog.open && (
+          {/* ... baris terakhir konten/toast Anda ... */}
+          {toast && (
+            <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[10000] bg-slate-900 text-white px-6 py-3 rounded-2xl text-[10px] font-black uppercase shadow-2xl">{toast}</div>
+          )}
+
+          {/* MODAL UBAH PASSWORD - TEMPELKAN DI SINI */}
+          {showPasswordModal && (
+            <div className="fixed inset-0 z-[800] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-md animate-in">
+              <div className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-[2.5rem] shadow-2xl border dark:border-slate-800 p-8 animate-scale-in">
+                <div className="flex flex-col items-center text-center mb-6">
+                  <div className="bg-blue-600 p-4 rounded-3xl text-white mb-4 shadow-lg">
+                    <Lock size={32} />
+                  </div>
+                  <h3 className="text-xl font-black text-slate-800 dark:text-white uppercase leading-tight">Ubah Passcode</h3>
+                  <p className="text-slate-400 font-bold text-[9px] uppercase tracking-widest mt-2">Update Akses Cloud {authorizedProdi}</p>
+                </div>
+                
+                <div className="space-y-4">
+                  {authorizedProdi !== 'SUPER_ADMIN' && (
+                    <div>
+                      <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Passcode Lama</label>
+                      <input 
+                        type="password" 
+                        value={newPasscodeData.old}
+                        onChange={(e) => setNewPasscodeData({...newPasscodeData, old: e.target.value})}
+                        className="w-full bg-slate-50 dark:bg-slate-800 border-none px-5 py-3 rounded-xl font-bold dark:text-white outline-none focus:ring-2 focus:ring-blue-600"
+                        placeholder="••••"
+                      />
+                    </div>
+                  )}
+                  <div>
+                    <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Passcode Baru (Min. 4 Karakter)</label>
+                    <input 
+                      type="password" 
+                      value={newPasscodeData.new}
+                      onChange={(e) => setNewPasscodeData({...newPasscodeData, new: e.target.value})}
+                      className="w-full bg-slate-50 dark:bg-slate-800 border-none px-5 py-3 rounded-xl font-bold dark:text-white outline-none focus:ring-2 focus:ring-blue-600"
+                      placeholder="••••"
+                    />
+                  </div>
+                  
+                  <div className="flex flex-col gap-2 pt-4">
+                    <button 
+                      onClick={handleChangePasscode}
+                      className="w-full py-3.5 bg-blue-600 text-white rounded-xl font-black text-[10px] uppercase shadow-lg hover:opacity-90"
+                    >
+                      Update di Cloud
+                    </button>
+                    <button 
+                      onClick={() => {
+                        setShowPasswordModal(false);
+                        setNewPasscodeData({old: '', new: ''});
+                      }}
+                      className="w-full py-3 text-slate-400 font-black text-[10px] uppercase"
+                    >
+                      Batal
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+            {confirmDialog.open && (
             <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm animate-in">
                 <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-[2.5rem] shadow-2xl border dark:border-slate-800 p-8 animate-scale-in">
                    <div className="flex items-center gap-4 mb-6">
@@ -977,101 +1099,99 @@
             </div>
           )}
 
-          {showAddModal && authorizedProdi === 'SUPER_ADMIN' && (
-            <div className="fixed inset-0 z-[550] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-md animate-in">
-              <div className="bg-white dark:bg-slate-900 w-full max-w-2xl rounded-[2.5rem] shadow-2xl p-8 border dark:border-slate-800 max-h-[95vh] overflow-y-auto custom-scrollbar">
+          {showAddModal && (
+            <div className="fixed inset-0 z-[700] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-md animate-in">
+              <div className="bg-white dark:bg-slate-900 w-full max-w-2xl rounded-[2.5rem] shadow-2xl p-8 border dark:border-slate-800 max-h-[90vh] overflow-y-auto custom-scrollbar">
                 <div className="flex justify-between items-center mb-6">
                   <div>
-                    <h3 className="text-xl font-black text-slate-800 dark:text-white uppercase leading-none">Tambah Jadwal Baru</h3>
-                    <p className="text-[10px] font-bold text-emerald-500 uppercase mt-1">Khusus Super Admin</p>
+                    <h3 className="text-xl font-black text-slate-800 dark:text-white uppercase tracking-tighter">Input Jadwal Manual</h3>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase mt-1">Sesuai Format Kolom Master Excel</p>
                   </div>
-                  <button onClick={() => setShowAddModal(false)} className="p-2 text-slate-400 hover:text-red-500 transition-colors">
-                    <svg xmlns="[http://www.w3.org/2000/svg](http://www.w3.org/2000/svg)" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                  <button onClick={() => setShowAddModal(false)} className="text-slate-400 hover:text-red-500 transition-colors">
+                    <X size={24}/>
                   </button>
                 </div>
 
-                <div className="space-y-5">
+                <div className="space-y-4">
+                  {/* Baris 1: Identitas Matkul */}
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="md:col-span-1">
-                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Kode Matkul</label>
-                      <input type="text" value={formData.kode_matkul} onChange={(e) => setFormData({...formData, kode_matkul: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700 focus:border-emerald-500 transition-all" placeholder="Contoh: PI04020" />
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Kode Matkul</label>
+                      <input type="text" placeholder="INF123" value={formData.kode_matkul} onChange={e => setFormData({...formData, kode_matkul: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border border-transparent focus:border-emerald-500" />
                     </div>
-                    <div className="md:col-span-2">
-                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Nama Mata Kuliah</label>
-                      <input type="text" value={formData.matkul} onChange={(e) => setFormData({...formData, matkul: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700 focus:border-emerald-500 transition-all" placeholder="Masukkan Nama Lengkap Matkul" />
+                    <div className="md:col-span-2 space-y-1">
+                      <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Nama Mata Kuliah</label>
+                      <input type="text" placeholder="Nama Matkul Lengkap" value={formData.matkul} onChange={e => setFormData({...formData, matkul: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border border-transparent focus:border-emerald-500" />
                     </div>
                   </div>
 
+                  {/* Baris 2: Dosen & Fakultas */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Dosen Pengampu</label>
-                      <input type="text" value={formData.dosen} onChange={(e) => setFormData({...formData, dosen: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700 focus:border-emerald-500 transition-all" placeholder="Nama Dosen Lengkap" />
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Dosen Pengampu</label>
+                      <input type="text" placeholder="Nama Dosen Lengkap" value={formData.dosen} onChange={e => setFormData({...formData, dosen: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border border-transparent focus:border-emerald-500" />
                     </div>
-                    <div>
-                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Program Studi</label>
-                      <select 
-                        value={formData.prodi} 
-                        onChange={(e) => setFormData({...formData, prodi: e.target.value})} 
-                        className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700 appearance-none"
-                      >
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Fakultas</label>
+                      <input type="text" placeholder="Contoh: SAINTEK" value={formData.fakultas} onChange={e => setFormData({...formData, fakultas: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border border-transparent focus:border-emerald-500" />
+                    </div>
+                  </div>
+
+                  {/* Baris 3: Prodi & Ruangan */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Program Studi</label>
+                      <select value={formData.prodi} onChange={e => setFormData({...formData, prodi: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold outline-none dark:text-white border-none appearance-none">
                         <option value="">-- Pilih Prodi --</option>
-                        {Object.values(PASSCODE_MAP).filter(v => v !== 'SUPER_ADMIN').map(p => (
+                        {/* MENGGUNAKAN CLOUD DATA + SORT ASCENDING AGAR RAPI */}
+                        {Object.values(cloudPasscodeMap || {}).filter(v => v !== 'SUPER_ADMIN').sort().map(p => (
                           <option key={p} value={p}>{p}</option>
                         ))}
                       </select>
                     </div>
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Ruangan</label>
+                      <input type="text" placeholder="Contoh: R.301" value={formData.ruangan} onChange={e => setFormData({...formData, ruangan: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none" />
+                    </div>
                   </div>
 
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  {/* Baris 4: Waktu & Detail */}
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                     <div>
-                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Hari</label>
-                      <select value={formData.hari} onChange={(e) => setFormData({...formData, hari: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700 appearance-none">
-                        {DAYS_ORDER.map(d => <option key={d} value={d}>{d}</option>)}
+                      <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Hari</label>
+                      <select value={formData.hari} onChange={e => setFormData({...formData, hari: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-xl font-bold outline-none dark:text-white border-none">{["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"].map(d => <option key={d} value={d}>{d}</option>)}</select>
+                    </div>
+                    <div>
+                      <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Waktu</label>
+                      <select value={formData.waktu} onChange={e => setFormData({...formData, waktu: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-xl font-bold dark:text-white outline-none border-none">
+                        {["07:00-08:40", "07:00-09:30", "08:50-10:30", "09:40-12:10", "10:40-12:20", "13:00-14:40", "13:00-15:30", "14:50-16:30", "15:40-18:10", "16:40-18:20", "18:20-20:50", "18:30-20:10"].map(t => (
+                          <option key={t} value={t}>{t}</option>
+                        ))}
                       </select>
                     </div>
                     <div>
-                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Waktu</label>
-                      <select value={formData.waktu} onChange={(e) => setFormData({...formData, waktu: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700 appearance-none">
-                        {TIMES_SLOTS.map(t => <option key={t} value={t}>{t}</option>)}
-                      </select>
+                      <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Kelas</label>
+                      <input type="text" placeholder="IF-A" value={formData.kelas} onChange={e => setFormData({...formData, kelas: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-xl font-bold dark:text-white outline-none border-none" />
                     </div>
                     <div>
-                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Kelas</label>
-                      <input type="text" value={formData.kelas} onChange={(e) => setFormData({...formData, kelas: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700" placeholder="4A, KEU-A, dll" />
+                      <label className="text-[9px] font-black text-slate-400 uppercase ml-2">SKS</label>
+                      <input type="number" placeholder="2" value={formData.sks} onChange={e => setFormData({...formData, sks: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-xl font-bold dark:text-white outline-none border-none" />
                     </div>
                     <div>
-                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Ruangan</label>
-                      <input type="text" value={formData.ruangan} onChange={(e) => setFormData({...formData, ruangan: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700" placeholder="01.03.37" />
+                      <label className="text-[9px] font-black text-slate-400 uppercase ml-2">SMT</label>
+                      <input type="number" placeholder="2" value={formData.semester} onChange={e => setFormData({...formData, semester: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-xl font-bold dark:text-white outline-none border-none" />
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-4">
-                    <div>
-                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Fakultas</label>
-                      <input type="text" value={formData.fakultas} onChange={(e) => setFormData({...formData, fakultas: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700" placeholder="Contoh: FT atau FAI" />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">SKS</label>
-                      <input type="number" value={formData.sks} onChange={(e) => setFormData({...formData, sks: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700" />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Semester</label>
-                      <input type="number" value={formData.semester} onChange={(e) => setFormData({...formData, semester: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700" />
-                    </div>
+                  {/* Baris 5: Keterangan */}
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Keterangan Tambahan</label>
+                    <input type="text" placeholder="Contoh: Reguler / Gabungan" value={formData.keterangan} onChange={e => setFormData({...formData, keterangan: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none" />
                   </div>
 
-                  <div>
-                    <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Keterangan</label>
-                    <select value={formData.keterangan} onChange={(e) => setFormData({...formData, keterangan: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700 appearance-none">
-                      <option value="Reguler">Reguler</option>
-                      <option value="Karyawan">Karyawan</option>
-                    </select>
-                  </div>
-
-                  <div className="flex flex-col sm:flex-row gap-3 pt-6">
-                    <button onClick={() => setShowAddModal(false)} className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-500 rounded-2xl font-black text-[10px] uppercase hover:bg-slate-200 transition-all">Batal</button>
-                    <button onClick={handleAddManual} className="flex-1 py-4 bg-emerald-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg shadow-emerald-500/20 hover:opacity-90 transition-all">Simpan ke Cloud</button>
-                  </div>
+                  <button onClick={handleAddManual} className="w-full py-4 bg-emerald-600 text-white rounded-[1.5rem] font-black uppercase shadow-lg shadow-emerald-500/20 mt-4 hover:bg-emerald-700 transition-all">
+                    Simpan Jadwal ke Cloud
+                  </button>
                 </div>
               </div>
             </div>
@@ -1155,6 +1275,13 @@
                           <p className="text-sm font-black truncate dark:text-white uppercase leading-none">{authorizedProdi}</p>
                         </div>
                       </div>
+                      {/* Tombol Ubah Password */}
+                      <button 
+                        onClick={() => setShowPasswordModal(true)} 
+                        className="w-full flex items-center justify-center gap-2 py-2.5 mb-2 bg-blue-50 dark:bg-blue-500/10 rounded-xl text-[10px] font-black text-blue-600 uppercase transition-all hover:bg-blue-100"
+                      >
+                        <Lock size={14} /> Ubah Password
+                      </button>
                       <button onClick={handleLogout} className="w-full flex items-center justify-center gap-2 py-2.5 bg-red-50 dark:bg-red-500/10 rounded-xl text-[10px] font-black text-red-600 uppercase transition-all">
                         <LogOut size={14} /> Logout
                       </button>
@@ -1163,6 +1290,7 @@
                     <button onClick={() => setLoginModal({...loginModal, open: true})} className="w-full flex items-center justify-center gap-3 py-4 bg-blue-600 text-white rounded-2xl font-black text-xs uppercase shadow-xl hover:opacity-90 transition-all">
                       <Unlock size={16} /> Login Kaprodi
                     </button>
+                    
                   )}
                 </div>
               )}
@@ -1257,21 +1385,96 @@
                   <>
                     {activeMenu === 'dashboard' && (
                       <div className="animate-in">
+                        {/* 1. STATISTIK DASHBOARD */}
                         <div className="no-print grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 lg:gap-6 mb-8 lg:mb-10">
-                             <div className="bg-white dark:bg-slate-900 p-5 sm:p-6 rounded-[2rem] border dark:border-slate-800 shadow-sm flex items-center gap-4 sm:gap-6 overflow-hidden">
-                                <div className="bg-blue-50 dark:bg-blue-900/20 p-3 sm:p-4 rounded-3xl text-blue-600 shrink-0"><BarChart3 size={24}/></div>
-                                <div className="min-w-0"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest truncate">Total Matkul</p><p className="text-xl sm:text-2xl font-black dark:text-white">{stats.totalMatkul}</p></div>
-                             </div>
-                             <div className="bg-white dark:bg-slate-900 p-5 sm:p-6 rounded-[2rem] border dark:border-slate-800 shadow-sm flex items-center gap-4 sm:gap-6 overflow-hidden">
-                                <div className="bg-emerald-50 dark:bg-emerald-900/20 p-3 sm:p-4 rounded-3xl text-emerald-600 shrink-0"><Users2 size={24}/></div>
-                                <div className="min-w-0"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest truncate">Dosen Aktif</p><p className="text-xl sm:text-2xl font-black dark:text-white">{stats.totalDosen}</p></div>
-                             </div>
-                             <div className="bg-white dark:bg-slate-900 p-5 sm:p-6 rounded-[2rem] border dark:border-slate-800 shadow-sm flex items-center gap-4 sm:gap-6 sm:col-span-2 lg:col-span-1 overflow-hidden">
-                                <div className="bg-indigo-50 dark:bg-indigo-900/20 p-3 sm:p-4 rounded-3xl text-indigo-600 shrink-0"><Building2 size={24}/></div>
-                                <div className="min-w-0"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest truncate">Ruang Aktif</p><p className="text-xl sm:text-2xl font-black dark:text-white">{stats.totalRuang}</p></div>
-                             </div>
+                          <div className="bg-white dark:bg-slate-900 p-5 sm:p-6 rounded-[2rem] border dark:border-slate-800 shadow-sm flex items-center gap-4 sm:gap-6 overflow-hidden">
+                            <div className="bg-blue-50 dark:bg-blue-900/20 p-3 sm:p-4 rounded-3xl text-blue-600 shrink-0"><BarChart3 size={24}/></div>
+                            <div className="min-w-0"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest truncate">Total Matkul</p><p className="text-xl sm:text-2xl font-black dark:text-white">{stats.totalMatkul}</p></div>
+                          </div>
+                          <div className="bg-white dark:bg-slate-900 p-5 sm:p-6 rounded-[2rem] border dark:border-slate-800 shadow-sm flex items-center gap-4 sm:gap-6 overflow-hidden">
+                            <div className="bg-emerald-50 dark:bg-emerald-900/20 p-3 sm:p-4 rounded-3xl text-emerald-600 shrink-0"><Users2 size={24}/></div>
+                            <div className="min-w-0"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest truncate">Dosen Aktif</p><p className="text-xl sm:text-2xl font-black dark:text-white">{stats.totalDosen}</p></div>
+                          </div>
+                          <div className="bg-white dark:bg-slate-900 p-5 sm:p-6 rounded-[2rem] border dark:border-slate-800 shadow-sm flex items-center gap-4 sm:gap-6 sm:col-span-2 lg:col-span-1 overflow-hidden">
+                            <div className="bg-indigo-50 dark:bg-indigo-900/20 p-3 sm:p-4 rounded-3xl text-indigo-600 shrink-0"><Building2 size={24}/></div>
+                            <div className="min-w-0"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest truncate">Ruang Aktif</p><p className="text-xl sm:text-2xl font-black dark:text-white">{stats.totalRuang}</p></div>
+                          </div>
                         </div>
 
+                        {/* --- PANEL MASTER PASSCODE CLOUD (COLLAPSIBLE) --- */}
+                        {authorizedProdi === 'SUPER_ADMIN' && isSidebarOpen && (
+                          <div className="px-4 mb-6 animate-in">
+                            <div className="bg-amber-50 dark:bg-amber-900/10 border-2 border-dashed border-amber-200 dark:border-amber-800/50 p-4 rounded-[2rem] transition-all duration-300">
+                              
+                              {/* Header Panel (Toggle) */}
+                              <button 
+                                type="button"
+                                onClick={() => setIsPasscodeExpanded(!isPasscodeExpanded)}
+                                className="flex items-center justify-between w-full group focus:outline-none"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <div className="bg-amber-500 p-1.5 rounded-lg text-white shadow-sm">
+                                    <Lock size={12} />
+                                  </div>
+                                  <span className="text-[9px] font-black text-amber-600 dark:text-amber-400 uppercase tracking-widest text-left">
+                                    Cloud Passcodes
+                                  </span>
+                                </div>
+                                <div className="text-amber-400 group-hover:text-amber-600">
+                                  {isPasscodeExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                                </div>
+                              </button>
+                              
+                              {/* Konten Daftar Passcode */}
+                              {isPasscodeExpanded && (
+                                <div className="mt-4 space-y-2 max-h-60 overflow-y-auto custom-scrollbar pr-1 animate-in">
+                                  {Object.entries(cloudPasscodeMap || {}).filter(([_, name]) => name !== 'SUPER_ADMIN').sort((a, b) => a[1].localeCompare(b[1])).map(([code, name]) => (
+                                    <div key={code} className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-amber-100 dark:border-amber-900/30 flex flex-col gap-1 group hover:border-amber-500 transition-all relative">
+                                      <span className="text-[7px] font-black text-slate-400 uppercase truncate pr-10">{name}</span>
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-[10px] font-black text-blue-600 dark:text-blue-400 tracking-tight">
+                                          {code}
+                                        </span>
+                                        
+                                        {/* Bagian Tombol Aksi */}
+                                        <div className="flex gap-1 items-center relative z-[100]">
+                                          <button 
+                                            type="button"
+                                            onClick={(e) => { 
+                                              e.preventDefault();
+                                              e.stopPropagation();
+                                              navigator.clipboard.writeText(code); 
+                                              setToast(`Salin: ${name}`); 
+                                            }} 
+                                            className="text-slate-300 hover:text-amber-600 p-1.5 rounded-md hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-all pointer-events-auto"
+                                            title="Salin"
+                                          >
+                                            <Copy size={12} />
+                                          </button>
+                                          <button 
+                                            type="button"
+                                            onClick={(e) => { 
+                                              e.preventDefault();
+                                              e.stopPropagation();
+                                              setAdminEditData({ prodi: name, oldCode: code, newCode: '' }); 
+                                              setShowAdminEditModal(true); 
+                                            }} 
+                                            className="text-slate-300 hover:text-blue-600 p-1.5 rounded-md hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-all pointer-events-auto"
+                                            title="Edit"
+                                          >
+                                            <Pencil size={12} />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 2. HEADER JUDUL & TOMBOL DASHBOARD */}
                         <div className="no-print mb-8 flex flex-col lg:flex-row lg:items-end justify-between gap-6">
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-3">
@@ -1283,21 +1486,43 @@
                             <p className="text-slate-400 dark:text-slate-500 font-bold text-[10px] uppercase tracking-widest mt-2">Visualisasi Jadwal Cloud Real-time</p>
                           </div>
                           <div className="flex flex-wrap gap-2">
-                             {authorizedProdi === 'SUPER_ADMIN' && (
+                            {authorizedProdi === 'SUPER_ADMIN' && (
                                 <button onClick={handleClearAll} className="flex-1 lg:flex-none flex items-center justify-center gap-2 px-4 py-3 bg-red-50 dark:bg-red-900/20 text-red-600 rounded-2xl font-black text-[10px] uppercase shadow-sm hover:bg-red-600 hover:text-white transition-all"><Trash2 size={16} className="shrink-0"/> <span className="hidden sm:inline">Hapus Database</span><span className="sm:hidden">Reset</span></button>
-                             )}
-                             <button onClick={downloadExcel} className="flex-1 lg:flex-none flex items-center justify-center gap-2 px-4 py-3 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl font-black text-[10px] uppercase shadow-sm hover:bg-slate-900 hover:text-white transition-all"><Download size={16} className="shrink-0"/> <span className="hidden sm:inline">Download Excel</span><span className="sm:hidden">Excel</span></button>
-                             <button onClick={() => window.print()} className="flex-1 lg:flex-none flex items-center justify-center gap-2 px-6 py-3 bg-slate-900 dark:bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg hover:opacity-90 transition-all"><Printer size={16} className="shrink-0"/> Cetak PDF</button>
+                            )}
+                            <button onClick={downloadExcel} className="flex-1 lg:flex-none flex items-center justify-center gap-2 px-4 py-3 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl font-black text-[10px] uppercase shadow-sm hover:bg-slate-900 hover:text-white transition-all"><Download size={16} className="shrink-0"/> <span className="hidden sm:inline">Download Excel</span><span className="sm:hidden">Excel</span></button>
+                            <button onClick={() => window.print()} className="flex-1 lg:flex-none flex items-center justify-center gap-2 px-6 py-3 bg-slate-900 dark:bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg hover:opacity-90 transition-all"><Printer size={16} className="shrink-0"/> Cetak PDF</button>
                           </div>
                         </div>
-
+                        
+                        {/* TOMBOL SORTING & FILTER DASHBOARD */}
                         <div className="no-print flex flex-wrap gap-2 mb-8 pb-6 border-b dark:border-slate-800">
-                            <SortButton label="Hari" sortKey="hari" />
-                            <SortButton label="Matakuliah" sortKey="matkul" />
-                            <SortButton label="Dosen" sortKey="dosen" />
-                            <SortButton label="Ruangan" sortKey="ruangan" />
+                          {[
+                            { label: 'Hari', key: 'hari' },
+                            { label: 'Matakuliah', key: 'matkul' },
+                            { label: 'Dosen', key: 'dosen' },
+                            { label: 'Ruangan', key: 'ruangan' }
+                          ].map((btn) => (
+                            <button
+                              key={btn.key}
+                              onClick={() => {
+                                const direction = sortConfig.key === btn.key && sortConfig.direction === 'asc' ? 'desc' : 'asc';
+                                setSortConfig({ key: btn.key, direction });
+                              }}
+                              className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase flex items-center gap-2 transition-all ${
+                                sortConfig.key === btn.key 
+                                ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' 
+                                : 'bg-white dark:bg-slate-900 text-slate-500 border dark:border-slate-800 hover:bg-slate-50'
+                              }`}
+                            >
+                              <ArrowUpDown size={12} />
+                              {btn.label}
+                              {sortConfig.key === btn.key && (
+                                <span className="ml-1 opacity-60 text-[8px]">{sortConfig.direction === 'asc' ? '↑' : '↓'}</span>
+                              )}
+                            </button>
+                          ))}
                         </div>
-
+                        {/* 3. GRID KARTU JADWAL */}
                         <div className="no-print grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 lg:gap-6">
                           {filteredSchedules.map((item) => (
                             <div key={item.id} className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-[2rem] p-5 lg:p-6 shadow-sm hover:shadow-2xl transition-all flex flex-col group relative overflow-hidden h-full">
@@ -1310,26 +1535,30 @@
                                 <p className="text-[11px] font-black text-blue-500 dark:text-blue-400 mt-2 uppercase truncate break-word-custom">{item.dosen}</p>
                               </div>
 
-                              {item.keterangan_rapat && item.keterangan_rapat !== '-' && (
-                                <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-900/30 rounded-[1.25rem]">
-                                  <p className="text-[8px] font-black text-amber-700 dark:text-amber-400 uppercase mb-2 flex items-center gap-1">
-                                    <AlertTriangle size={10} className="shrink-0"/> Jadwal Diperbarui
-                                  </p>
-                                  <button 
-                                    onClick={() => setActiveMenu('history')} 
-                                    className="w-full py-2 bg-amber-600 text-white rounded-xl text-[8px] font-black uppercase flex items-center justify-center gap-2 hover:bg-amber-700 transition-colors"
-                                  >
-                                    <History size={12}/> Detail Riwayat
-                                  </button>
-                                </div>
-                              )}
-
+                              {/* INDIKATOR PERUBAHAN (NOTIFIKASI) */}
+                                {item.keterangan_rapat && item.keterangan_rapat !== "-" && item.keterangan_rapat !== "" && (
+                                  <div className="mb-4 animate-bounce-subtle">
+                                    <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 p-3 rounded-2xl flex items-start gap-3">
+                                      <div className="bg-amber-500 p-1.5 rounded-lg text-white shrink-0 mt-0.5 shadow-sm">
+                                        <AlertTriangle size={12} />
+                                      </div>
+                                      <div className="overflow-hidden">
+                                        <p className="text-[9px] font-black text-amber-600 dark:text-amber-400 uppercase tracking-widest mb-1">
+                                          Pembaruan Jadwal
+                                        </p>
+                                        <p className="text-[10px] font-bold text-slate-600 dark:text-slate-300 leading-tight italic">
+                                          {item.keterangan_rapat}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
                               <div className="mt-auto bg-slate-50 dark:bg-slate-800/50 rounded-2xl p-4 space-y-2 border border-transparent dark:border-slate-800/50">
                                 <div className="flex items-center gap-3 text-[11px] font-bold text-slate-600 dark:text-slate-400 min-w-0"><Calendar size={13} className="text-blue-500 shrink-0" /><span className="truncate">{item.hari}, {item.waktu}</span></div>
                                 <div className="flex items-center gap-3 text-[11px] font-bold text-slate-600 dark:text-slate-400 min-w-0"><MapPin size={13} className="text-indigo-500 shrink-0" /><span className="truncate">{item.ruangan}</span></div>
                               </div>
                             </div>
-                          ))} 
+                          ))}
                         </div>
                       </div>
                     )}
@@ -1681,6 +1910,28 @@
                             return (<div key={day} className="day-section"><h3 style={{fontSize: '11pt', fontWeight: 'bold', marginBottom: '8px', paddingLeft: '8px', borderLeft: '4px solid #000'}}>{day.toUpperCase()}</h3><table className="w-full"><thead><tr><th style={{width: '15%'}}>WAKTU</th><th style={{width: '35%'}}>MATAKULIAH</th><th style={{width: '25%'}}>DOSEN</th><th style={{width: '8%', textAlign: 'center'}}>KLS</th><th style={{width: '12%', textAlign: 'center'}}>RUANG</th></tr></thead><tbody>{daySchedules.map((item) => (<tr key={item.id}><td style={{fontWeight: 'bold'}}>{item.waktu}</td><td><div style={{fontWeight: 'bold', fontSize: '8.5pt'}}>{item.matkul.toUpperCase()}</div><div style={{fontSize: '7pt'}}>Semester {item.semester} • {item.sks} SKS</div></td><td style={{fontSize: '7.5pt'}}>{item.dosen.toUpperCase()}</td><td style={{textAlign: 'center'}}>{item.kelas}</td><td style={{textAlign: 'center', fontWeight: 'bold'}}>{item.ruangan}</td></tr>))}</tbody></table></div>);
                           })}
                         </div>
+                        {/* MODAL ADMIN EDIT PASSCODE PRODI */}
+                        {showAdminEditModal && (
+                          <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-md animate-in">
+                            <div className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-[2.5rem] shadow-2xl p-8 border dark:border-slate-800 animate-scale-in">
+                              <div className="text-center mb-6">
+                                <div className="bg-blue-600 w-12 h-12 rounded-2xl flex items-center justify-center text-white mx-auto mb-4"><UserCog size={24} /></div>
+                                <h3 className="text-lg font-black text-slate-800 dark:text-white uppercase leading-tight">Edit Passcode</h3>
+                                <p className="text-[10px] font-bold text-blue-500 uppercase mt-2">{adminEditData.prodi}</p>
+                              </div>
+                              <div className="space-y-4">
+                                <div>
+                                  <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Passcode Baru</label>
+                                  <input type="text" value={adminEditData.newCode} onChange={(e) => setAdminEditData({...adminEditData, newCode: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700" placeholder="Min. 4 Karakter" autoFocus />
+                                </div>
+                                <div className="flex gap-2 pt-4">
+                                  <button onClick={() => setShowAdminEditModal(false)} className="flex-1 py-3.5 bg-slate-100 dark:bg-slate-800 text-slate-500 rounded-xl font-black text-[10px] uppercase">Batal</button>
+                                  <button onClick={handleAdminUpdatePasscode} className="flex-1 py-3.5 bg-blue-600 text-white rounded-xl font-black text-[10px] uppercase shadow-lg">Update</button>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                     </div>
                   </>
                 )}
