@@ -202,6 +202,21 @@
       const [loginModal, setLoginModal] = useState({ open: false, passcode: '', error: '' });
 
       const fileInputRef = useRef(null);
+      const [showAddModal, setShowAddModal] = useState(false);
+      const [formData, setFormData] = useState({
+        kode_matkul: '',
+        matkul: '',
+        sks: '2',
+        semester: '2',
+        dosen: '',
+        hari: 'Senin',
+        waktu: '07:00-08:40',
+        kelas: '',
+        ruangan: '',
+        prodi: '', 
+        fakultas: '',
+        keterangan: 'Reguler'
+      });
 
       // --- INITIAL AUTH ---
       useEffect(() => {
@@ -391,14 +406,16 @@
       };
 
       const handleSelectAllHistory = () => {
-        // Ambil hanya riwayat yang boleh diakses oleh user/prodi saat ini
+        // Memastikan data yang dipilih hanya yang muncul di layar (sesuai hak akses role)
         const accessibleHistory = historyLog.filter(log => 
           authorizedProdi === 'SUPER_ADMIN' || log.prodi === authorizedProdi
         );
         
+        if (accessibleHistory.length === 0) return;
+
         const allIds = accessibleHistory.map(log => log.id);
 
-        // Jika semua sudah terpilih, maka kosongkan. Jika belum, pilih semua.
+        // Toggle: Jika sudah terpilih semua, lepas semua. Jika belum, pilih semua.
         if (selectedHistoryIds.length === allIds.length && allIds.length > 0) {
           setSelectedHistoryIds([]);
         } else {
@@ -675,7 +692,6 @@
       const executeMove = (slot) => {
         if (!authorizedProdi || !swapReason.trim()) return;
         
-        // Inisialisasi data asal agar tidak error saat pencatatan
         const dosenAsal = swapDosenAsal || swapMatkulAsal.dosen || "TBA";
         const kelasAsal = swapMatkulAsal.kelas || "-";
         
@@ -685,7 +701,8 @@
           async () => {
             const ts = new Date().toLocaleString('id-ID');
             
-            const ketInformatif = `[NOTULIS: ${adminName}] ALASAN: ${swapReason}. ` +
+            // Update baris ini: Menambahkan label semester ke log keterangan
+            const ketInformatif = `[NOTULIS: ${adminName}] [SMT GENAP 25/26] ALASAN: ${swapReason}. ` +
               `PINDAH: ${dosenAsal} (Kls: ${kelasAsal}, ${swapMatkulAsal.hari}, ${swapMatkulAsal.waktu}, R:${swapMatkulAsal.ruangan}) ` +
               `-> KE: (${slot.hari}, ${slot.waktu}, R:${slot.ruangan})`;
 
@@ -714,6 +731,40 @@
           }
         );
       };
+
+      const handleAddManual = async () => {
+        if (authorizedProdi !== 'SUPER_ADMIN') return;
+
+        // Validasi: Matkul, Ruangan, Dosen, dan Prodi wajib diisi
+        if (!formData.matkul || !formData.ruangan || !formData.dosen || !formData.prodi) {
+          return setToast("⚠️ Mohon lengkapi Matkul, Dosen, Ruangan, dan Program Studi!");
+        }
+        
+        const manualId = `manual-${Date.now()}`;
+        const prodiTujuan = formData.prodi; // Mengambil dari pilihan di form
+        
+        const newItem = {
+          ...formData,
+          id: manualId,
+          prodi: prodiTujuan,
+          keterangan_rapat: `[INPUT MANUAL] [GENAP 25/26] Ditambahkan oleh SUPER ADMIN (${adminName}) pada ${new Date().toLocaleString('id-ID')}`
+        };
+
+        try {
+          await saveToCloud('schedules', manualId, newItem);
+          setToast(`✅ Berhasil! Jadwal ${formData.matkul} ditambahkan ke ${prodiTujuan}.`);
+          setShowAddModal(false);
+          
+          // Reset form ke kondisi awal
+          setFormData({
+            kode_matkul: '', matkul: '', sks: '2', semester: '2', dosen: '',
+            hari: 'Senin', waktu: '07:00-08:40', kelas: '', ruangan: '', prodi: '', fakultas: '', keterangan: 'Reguler'
+          });
+        } catch (err) {
+          setToast("❌ Gagal menyimpan jadwal manual.");
+        }
+      };
+
 
       const executeMultiUndo = async () => {
         if (!authorizedProdi) return;
@@ -860,6 +911,106 @@
             </div>
           )}
 
+          {showAddModal && authorizedProdi === 'SUPER_ADMIN' && (
+            <div className="fixed inset-0 z-[550] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-md animate-in">
+              <div className="bg-white dark:bg-slate-900 w-full max-w-2xl rounded-[2.5rem] shadow-2xl p-8 border dark:border-slate-800 max-h-[95vh] overflow-y-auto custom-scrollbar">
+                <div className="flex justify-between items-center mb-6">
+                  <div>
+                    <h3 className="text-xl font-black text-slate-800 dark:text-white uppercase leading-none">Tambah Jadwal Baru</h3>
+                    <p className="text-[10px] font-bold text-emerald-500 uppercase mt-1">Khusus Super Admin</p>
+                  </div>
+                  <button onClick={() => setShowAddModal(false)} className="p-2 text-slate-400 hover:text-red-500 transition-colors">
+                    <svg xmlns="[http://www.w3.org/2000/svg](http://www.w3.org/2000/svg)" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                  </button>
+                </div>
+
+                <div className="space-y-5">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="md:col-span-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Kode Matkul</label>
+                      <input type="text" value={formData.kode_matkul} onChange={(e) => setFormData({...formData, kode_matkul: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700 focus:border-emerald-500 transition-all" placeholder="Contoh: PI04020" />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Nama Mata Kuliah</label>
+                      <input type="text" value={formData.matkul} onChange={(e) => setFormData({...formData, matkul: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700 focus:border-emerald-500 transition-all" placeholder="Masukkan Nama Lengkap Matkul" />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Dosen Pengampu</label>
+                      <input type="text" value={formData.dosen} onChange={(e) => setFormData({...formData, dosen: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700 focus:border-emerald-500 transition-all" placeholder="Nama Dosen Lengkap" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Program Studi</label>
+                      <select 
+                        value={formData.prodi} 
+                        onChange={(e) => setFormData({...formData, prodi: e.target.value})} 
+                        className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700 appearance-none"
+                      >
+                        <option value="">-- Pilih Prodi --</option>
+                        {Object.values(PASSCODE_MAP).filter(v => v !== 'SUPER_ADMIN').map(p => (
+                          <option key={p} value={p}>{p}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Hari</label>
+                      <select value={formData.hari} onChange={(e) => setFormData({...formData, hari: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700 appearance-none">
+                        {DAYS_ORDER.map(d => <option key={d} value={d}>{d}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Waktu</label>
+                      <select value={formData.waktu} onChange={(e) => setFormData({...formData, waktu: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700 appearance-none">
+                        {TIMES_SLOTS.map(t => <option key={t} value={t}>{t}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Kelas</label>
+                      <input type="text" value={formData.kelas} onChange={(e) => setFormData({...formData, kelas: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700" placeholder="4A, KEU-A, dll" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Ruangan</label>
+                      <input type="text" value={formData.ruangan} onChange={(e) => setFormData({...formData, ruangan: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700" placeholder="01.03.37" />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-4">
+                    <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Fakultas</label>
+                      <input type="text" value={formData.fakultas} onChange={(e) => setFormData({...formData, fakultas: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700" placeholder="Contoh: FT atau FAI" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">SKS</label>
+                      <input type="number" value={formData.sks} onChange={(e) => setFormData({...formData, sks: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Semester</label>
+                      <input type="number" value={formData.semester} onChange={(e) => setFormData({...formData, semester: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700" />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-black text-slate-400 uppercase ml-2">Keterangan</label>
+                    <select value={formData.keterangan} onChange={(e) => setFormData({...formData, keterangan: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700 appearance-none">
+                      <option value="Reguler">Reguler</option>
+                      <option value="Karyawan">Karyawan</option>
+                    </select>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row gap-3 pt-6">
+                    <button onClick={() => setShowAddModal(false)} className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-500 rounded-2xl font-black text-[10px] uppercase hover:bg-slate-200 transition-all">Batal</button>
+                    <button onClick={handleAddManual} className="flex-1 py-4 bg-emerald-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg shadow-emerald-500/20 hover:opacity-90 transition-all">Simpan ke Cloud</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {isSidebarOpen && window.innerWidth <= 1024 && (
             <div 
               onClick={() => setSidebarOpen(false)} 
@@ -875,7 +1026,7 @@
                   <h1 className="font-black text-xs md:text-sm lg:text-lg uppercase tracking-tighter leading-tight dark:text-white break-words">
                     Manajemen Jadwal UMB
                   </h1>
-                  <p className="text-[9px] font-bold text-blue-500 uppercase tracking-widest mt-0.5">Cloud System</p>
+                  <p className="text-[10px] font-bold text-blue-500 uppercase tracking-widest mt-1">Cloud Edition - Semester Genap 2025/2026</p>
                 </div>
               )}
               <button onClick={() => setSidebarOpen(false)} className="lg:hidden absolute right-4 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-red-500"><X size={20}/></button>
@@ -961,19 +1112,33 @@
                   <input type="text" placeholder="Cari matkul, dosen..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full bg-slate-50 dark:bg-slate-800/50 border-none rounded-2xl pl-12 pr-4 py-2.5 text-sm font-medium outline-none dark:text-white dark:placeholder-slate-500" />
                 </div>
               </div>
-              <div className="flex items-center justify-between lg:justify-end gap-3 w-full lg:w-auto">
-                <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[9px] font-black uppercase border transition-colors ${isOnline ? 'text-emerald-500 border-emerald-500/20' : 'text-red-500 border-red-500/20'}`}>
-                   {isOnline ? <Wifi size={12}/> : <WifiOff size={12}/>} <span className="hidden sm:inline">{isOnline ? "Live Sync" : "Offline"}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                    <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition-all shrink-0">
-                      {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
+              <div className="flex items-center gap-2">
+                <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition-all shrink-0">
+                  {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
+                </button>
+
+                {authorizedProdi === 'SUPER_ADMIN' && (
+                  <>
+                    <button 
+                      onClick={() => fileInputRef.current.click()} 
+                      className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 dark:bg-blue-600 text-white rounded-xl text-[10px] sm:text-xs font-black shadow-md shrink-0 transition-all hover:opacity-90"
+                    >
+                      <FileUp size={16} /> 
+                      <span className="hidden sm:inline">Update Jadwal</span>
+                      <span className="sm:hidden uppercase font-black">Excel</span>
                     </button>
-                    {authorizedProdi === 'SUPER_ADMIN' && (
-                       <button onClick={() => fileInputRef.current.click()} className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 dark:bg-blue-600 text-white rounded-xl text-[10px] sm:text-xs font-black shadow-md shrink-0"><FileUp size={16} /> <span className="hidden sm:inline">Update Jadwal</span><span className="sm:hidden uppercase font-black">Excel</span></button>
-                    )}
-                    <input type="file" ref={fileInputRef} className="hidden" accept=".xlsx,.xls" onChange={handleFileUpload} />
-                </div>
+
+                    <button 
+                      onClick={() => setShowAddModal(true)} 
+                      className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-[10px] sm:text-xs font-black shadow-md transition-all shrink-0"
+                    >
+                      <svg xmlns="[http://www.w3.org/2000/svg](http://www.w3.org/2000/svg)" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                      <span>Tambah Manual</span>
+                    </button>
+                  </>
+                )}
+
+                <input type="file" ref={fileInputRef} className="hidden" accept=".xlsx,.xls" onChange={handleFileUpload} />
               </div>
             </header>
 
@@ -1418,7 +1583,9 @@
 
                     <div className="print-only">
                         <div style={{textAlign: 'center', marginBottom: '30px', borderBottom: '2px solid #000', paddingBottom: '15px'}}>
-                           <div style={{fontSize: '18pt', fontWeight: '900', textTransform: 'uppercase', marginBottom: '5px'}}>{searchTerm ? `JADWAL ${searchTerm.toUpperCase()}` : `JADWAL KULIAH: ${selectedProdi.toUpperCase()}`}</div>
+                           <div style={{fontSize: '18pt', fontWeight: '900', textTransform: 'uppercase', marginBottom: '5px'}}>{searchTerm ? `JADWAL ${searchTerm.toUpperCase()}` : `JADWAL KULIAH`}</div>
+                           <div style={{fontSize: '10pt', color: '#000', fontWeight: 'bold'}}>{selectedProdi.toUpperCase()}</div>
+                           <div style={{fontSize: '10pt', color: '#000', fontWeight: 'bold'}}>SEMESTER GENAP 25/26</div>
                            <div style={{fontSize: '10pt', color: '#000', fontWeight: 'bold'}}>UNIVERSITAS MUHAMMADIYAH BANDUNG</div>
                            <div style={{fontSize: '8pt', color: '#000'}}>Notulis: {adminName} | Dicetak: {new Date().toLocaleString('id-ID')}</div>
                         </div>
