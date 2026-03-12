@@ -685,7 +685,7 @@
           await saveToCloud('schedules', swapMatkulAsal.id, newHistory.affected[0].after);
           await saveToCloud('schedules', rowTuj.id, newHistory.affected[1].after);
           await saveToCloud('history', newHistory.id, newHistory);
-          setToast("Penukaran Berhasil!"); resetSwapFlow();
+          setToast("Jadwal Berhasil Ditukar!"); resetSwapFlow();
         });
       };
 
@@ -726,7 +726,7 @@
             await saveToCloud('schedules', swapMatkulAsal.id, newHistory.affected[0].after);
             await saveToCloud('history', newHistory.id, newHistory);
             
-            setToast("✅ Jadwal Berhasil Dipindahkan!");
+            setToast("Jadwal Berhasil Dipindahkan!");
             resetSwapFlow();
           }
         );
@@ -1610,3 +1610,4 @@
   </script>
 </body>
 </html>
+
