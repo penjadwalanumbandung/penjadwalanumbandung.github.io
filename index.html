@@ -23,6 +23,9 @@
     .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
     .dark .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; }
 
+    /* Fix for clashing text */
+    .break-word-custom { word-break: break-word; overflow-wrap: break-word; }
+
     @media print {
       @page { size: A4 portrait; margin: 10mm; }
       .no-print { display: none !important; }
@@ -96,14 +99,21 @@
     // --- CONSTANTS ---
     const PASSCODE_MAP = {
       "ADMIN": "SUPER_ADMIN", 
-      "IF": "Teknik Informatika",
-      "ELK-UMB": "Teknik Elektro",
+      "IF-UMB": "Teknik Informatika",
+      "EL-UMB": "Teknik Elektro",
       "DKV-UMB": "DKV",
       "MNJ-UMB": "Manajemen",
-      "ADM-UMB": "Administrasi Publik",
-      "IKM-UMB": "Ilmu Komunikasi",
+      "AP-UMB": "Administrasi Publik",
+      "IK-UMB": "Ilmu Komunikasi",
       "PAI-UMB": "Pendidikan Agama Islam",
-      "MM-UMB": "Magister Manajemen"
+      "MM-UMB": "Magister Manajemen",
+      "AGRI-UMB": "Agribisnis",
+      "FAR-UMB": "Farmasi",
+      "TEP-UMB": "Teknologi Pangan",
+      "BIO-UMB": "Bioteknologi",
+      "PSIK-UMB": "Psikologi",
+      "HK-UMB": "Hukum Keluarga",
+      "KRY-UMB": "Kriya Tekstil dan Fashion"
     };
 
     const DAYS_ORDER = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
@@ -165,7 +175,7 @@
       const [authorizedProdi, setAuthorizedProdi] = useState(() => sessionStorage.getItem(AUTH_SESSION_KEY) || null); 
       const [isOnline, setIsOnline] = useState(navigator.onLine);
       const [activeMenu, setActiveMenu] = useState('dashboard');
-      const [isSidebarOpen, setSidebarOpen] = useState(true);
+      const [isSidebarOpen, setSidebarOpen] = useState(window.innerWidth > 1024);
       const [schedules, setSchedules] = useState([]);
       const [historyLog, setHistoryLog] = useState([]);
       const [isLoadingData, setIsLoadingData] = useState(true);
@@ -380,6 +390,22 @@
         setToast("Berhasil Logout.");
       };
 
+      const handleSelectAllHistory = () => {
+        // Ambil hanya riwayat yang boleh diakses oleh user/prodi saat ini
+        const accessibleHistory = historyLog.filter(log => 
+          authorizedProdi === 'SUPER_ADMIN' || log.prodi === authorizedProdi
+        );
+        
+        const allIds = accessibleHistory.map(log => log.id);
+
+        // Jika semua sudah terpilih, maka kosongkan. Jika belum, pilih semua.
+        if (selectedHistoryIds.length === allIds.length && allIds.length > 0) {
+          setSelectedHistoryIds([]);
+        } else {
+          setSelectedHistoryIds(allIds);
+        }
+      };
+
       // --- IMPROVED EXCEL PROCESSOR (FIXED FOR 1285 DATA) ---
       const processFile = async (file) => {
         if (authorizedProdi !== 'SUPER_ADMIN') {
@@ -432,7 +458,6 @@
                               (authorizedProdi.toLowerCase().includes(prodiVal.toLowerCase()));
               
               if (isMatch) {
-                // FIXED: Create a truly unique ID using Code + Class + Index to prevent overwriting
                 const rawId = kodeVal || `gen-${Date.now()}`;
                 const sanitizedBaseId = rawId.replace(/[\/\.\#\$\[\]]/g, '-');
                 const finalId = `${sanitizedBaseId}-${kelasVal.replace(/[\/\.\#\$\[\]]/g, '-')}-${i}`;
@@ -456,7 +481,6 @@
                 count++;
                 opCount++;
 
-                // Firestore batch limit is 500 operations
                 if (opCount >= 450) {
                   await currentBatch.commit();
                   currentBatch = writeBatch(db);
@@ -583,10 +607,14 @@
         return sortSchedulesByDay(candidates, 'asc');
       }, [swapMatkulAsal, schedules, authorizedProdi, swapDosenAsal, swapDayFilter]);
 
+      // 1. Perbaikan Logic (useMemo)
       const moveOptions = useMemo(() => {
         if (!swapMatkulAsal) return [];
         const allRooms = [...new Set(schedules.map(s => s.ruangan.trim()))].filter(r => r && r !== '-' && !r.toLowerCase().includes('online'));
+        
+        // Filter jadwal HANYA pada hari yang dipilih di UI (swapTargetDay)
         const targetDaySchedules = schedules.filter(s => s.hari.trim().toLowerCase() === swapTargetDay.trim().toLowerCase());
+        
         const options = [];
         const lecturerAsalNorm = swapDosenAsal.toLowerCase().trim();
         const classAsalNorm = swapMatkulAsal.kelas.toLowerCase().trim();
@@ -595,6 +623,7 @@
           const rangeJam = getSlotRange(jam);
           if (targetDaySchedules.some(s => s.dosen.toLowerCase().trim() === lecturerAsalNorm && isOverlap(rangeJam, getSlotRange(s.waktu)))) return;
           if (targetDaySchedules.some(s => s.kelas.toLowerCase().trim() === classAsalNorm && isOverlap(rangeJam, getSlotRange(s.waktu)))) return;
+          
           allRooms.forEach(rm => {
             if (!targetDaySchedules.some(s => s.ruangan.trim() === rm && isOverlap(rangeJam, getSlotRange(s.waktu)))) {
               options.push({ hari: swapTargetDay, waktu: jam, ruangan: rm });
@@ -602,7 +631,18 @@
           });
         });
         return options;
-      }, [swapMatkulAsal, swapTargetDay, schedules, swapDosenAsal]);
+      }, [swapMatkulAsal, swapTargetDay, schedules, swapDosenAsal]); // Pastikan swapTargetDay masuk dependency
+
+      // 2. Perbaikan UI Filter Hari (Gunakan onClick untuk setSwapTargetDay)
+      {DAYS_ORDER.map(day => (
+        <button 
+          key={day} 
+          onClick={() => setSwapTargetDay(day)} 
+          className={`px-4 py-2 rounded-xl text-[9px] font-black uppercase ${swapTargetDay === day ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400'}`}
+        >
+          {day}
+        </button>
+      ))}
 
       const showConfirm = (title, message, onConfirm) => {
         setConfirmDialog({ open: true, title, message, onConfirm });
@@ -612,30 +652,21 @@
         if (!authorizedProdi || !swapReason.trim()) return;
         showConfirm("Konfirmasi Swap", `Tukar jadwal [${swapMatkulAsal.matkul}] dengan [${rowTuj.matkul}]?`, async () => {
           const ts = new Date().toLocaleString('id-ID');
+          // Format Keterangan Informatif (Poin 1)
+          const ketInformatif = `[NOTULIS: ${adminName}] ALASAN: ${swapReason}. ` +
+          `DOSEN ASAL: ${swapDosenAsal} (${swapMatkulAsal.hari}, ${swapMatkulAsal.waktu}, R:${swapMatkulAsal.ruangan}) ` +
+          `<=> DOSEN TUJUAN: ${rowTuj.dosen} (${rowTuj.hari}, ${rowTuj.waktu}, R:${rowTuj.ruangan})`;
+
           const newHistory = {
             id: Date.now(),
-            type: 'SWAP',
-            admin: authorizedProdi,
-            timestamp: ts,
-            reason: swapReason,
-            prodi: swapMatkulAsal.prodi,
+            type: 'SWAP', admin: authorizedProdi, timestamp: ts, reason: swapReason, prodi: swapMatkulAsal.prodi,
             affected: [
-              { 
-                id: swapMatkulAsal.id, 
-                matkul: swapMatkulAsal.matkul, 
-                before: { ...swapMatkulAsal }, 
-                after: { ...swapMatkulAsal, hari: rowTuj.hari, waktu: rowTuj.waktu, ruangan: rowTuj.ruangan } 
-              },
-              { 
-                id: rowTuj.id, 
-                matkul: rowTuj.matkul, 
-                before: { ...rowTuj }, 
-                after: { ...rowTuj, hari: swapMatkulAsal.hari, waktu: swapMatkulAsal.waktu, ruangan: swapMatkulAsal.ruangan } 
-              }
+              { id: swapMatkulAsal.id, matkul: swapMatkulAsal.matkul, before: { ...swapMatkulAsal }, after: { ...swapMatkulAsal, hari: rowTuj.hari, waktu: rowTuj.waktu, ruangan: rowTuj.ruangan, keterangan_rapat: ketInformatif } },
+              { id: rowTuj.id, matkul: rowTuj.matkul, before: { ...rowTuj }, after: { ...rowTuj, hari: swapMatkulAsal.hari, waktu: swapMatkulAsal.waktu, ruangan: swapMatkulAsal.ruangan, keterangan_rapat: ketInformatif } }
             ]
           };
-          await saveToCloud('schedules', swapMatkulAsal.id, { ...swapMatkulAsal, hari: rowTuj.hari, waktu: rowTuj.waktu, ruangan: rowTuj.ruangan, keterangan_rapat: `(Asal: ${swapMatkulAsal.hari}, ${swapMatkulAsal.waktu})` });
-          await saveToCloud('schedules', rowTuj.id, { ...rowTuj, hari: swapMatkulAsal.hari, waktu: swapMatkulAsal.waktu, ruangan: swapMatkulAsal.ruangan, keterangan_rapat: `(Asal: ${rowTuj.hari}, ${rowTuj.waktu})` });
+          await saveToCloud('schedules', swapMatkulAsal.id, newHistory.affected[0].after);
+          await saveToCloud('schedules', rowTuj.id, newHistory.affected[1].after);
           await saveToCloud('history', newHistory.id, newHistory);
           setToast("Penukaran Berhasil!"); resetSwapFlow();
         });
@@ -643,28 +674,45 @@
 
       const executeMove = (slot) => {
         if (!authorizedProdi || !swapReason.trim()) return;
-        showConfirm("Konfirmasi Move", `Pindahkan ke ${slot.hari} jam ${slot.waktu}?`, async () => {
-          const ts = new Date().toLocaleString('id-ID');
-          const newHistory = {
-            id: Date.now(),
-            type: 'MOVE',
-            admin: authorizedProdi,
-            timestamp: ts,
-            reason: swapReason,
-            prodi: swapMatkulAsal.prodi,
-            affected: [
-              { 
-                id: swapMatkulAsal.id, 
-                matkul: swapMatkulAsal.matkul, 
-                before: { ...swapMatkulAsal }, 
-                after: { ...swapMatkulAsal, hari: slot.hari, waktu: slot.waktu, ruangan: slot.ruangan } 
-              }
-            ]
-          };
-          await saveToCloud('schedules', swapMatkulAsal.id, { ...swapMatkulAsal, hari: slot.hari, waktu: slot.waktu, ruangan: slot.ruangan, keterangan_rapat: `(Asal: ${swapMatkulAsal.hari}, ${swapMatkulAsal.waktu})` });
-          await saveToCloud('history', newHistory.id, newHistory);
-          setToast("Pemindahan Berhasil!"); resetSwapFlow();
-        });
+        
+        // Inisialisasi data asal agar tidak error saat pencatatan
+        const dosenAsal = swapDosenAsal || swapMatkulAsal.dosen || "TBA";
+        const kelasAsal = swapMatkulAsal.kelas || "-";
+        
+        showConfirm(
+          "Konfirmasi Pindah Jadwal", 
+          `Pindahkan [${swapMatkulAsal.matkul}] ke hari ${slot.hari} pukul ${slot.waktu} di Ruang ${slot.ruangan}?`, 
+          async () => {
+            const ts = new Date().toLocaleString('id-ID');
+            
+            const ketInformatif = `[NOTULIS: ${adminName}] ALASAN: ${swapReason}. ` +
+              `PINDAH: ${dosenAsal} (Kls: ${kelasAsal}, ${swapMatkulAsal.hari}, ${swapMatkulAsal.waktu}, R:${swapMatkulAsal.ruangan}) ` +
+              `-> KE: (${slot.hari}, ${slot.waktu}, R:${slot.ruangan})`;
+
+            const newHistory = {
+              id: Date.now(),
+              type: 'MOVE',
+              admin: authorizedProdi,
+              timestamp: ts,
+              reason: swapReason,
+              prodi: swapMatkulAsal.prodi,
+              affected: [
+                { 
+                  id: swapMatkulAsal.id, 
+                  matkul: swapMatkulAsal.matkul, 
+                  before: { ...swapMatkulAsal }, 
+                  after: { ...swapMatkulAsal, hari: slot.hari, waktu: slot.waktu, ruangan: slot.ruangan, keterangan_rapat: ketInformatif } 
+                }
+              ]
+            };
+
+            await saveToCloud('schedules', swapMatkulAsal.id, newHistory.affected[0].after);
+            await saveToCloud('history', newHistory.id, newHistory);
+            
+            setToast("✅ Jadwal Berhasil Dipindahkan!");
+            resetSwapFlow();
+          }
+        );
       };
 
       const executeMultiUndo = async () => {
@@ -731,7 +779,6 @@
          return asalMatch ? asalMatch[0] : fullLog;
       };
 
-      // Generate prodi list from fetched cloud data
       const cloudProdiList = useMemo(() => {
         return [...new Set(schedules.map(s => s.prodi))].filter(p => p).sort();
       }, [schedules]);
@@ -747,12 +794,12 @@
               onDragEnter={handleDrag} onDragLeave={handleDrag} onDragOver={handleDrag} onDrop={handleDrop}
               className="fixed inset-0 z-[300] bg-blue-600/20 backdrop-blur-md flex flex-col items-center justify-center p-10 animate-in"
             >
-               <div className="w-full max-w-2xl border-4 border-dashed border-blue-600 rounded-[4rem] bg-white/80 dark:bg-slate-900/80 p-20 flex flex-col items-center justify-center text-center shadow-2xl">
+               <div className="w-full max-w-2xl border-4 border-dashed border-blue-600 rounded-[4rem] bg-white/80 dark:bg-slate-900/80 p-5 sm:p-20 flex flex-col items-center justify-center text-center shadow-2xl">
                   <div className="bg-blue-600 p-8 rounded-[2.5rem] text-white shadow-2xl animate-bounce-slow mb-8">
                      <UploadCloud size={64} />
                   </div>
-                  <h2 className="text-4xl font-black text-slate-800 dark:text-white uppercase tracking-tighter mb-4">Lepaskan File Excel</h2>
-                  <p className="text-slate-500 font-bold uppercase tracking-widest text-sm">
+                  <h2 className="text-2xl sm:text-4xl font-black text-slate-800 dark:text-white uppercase tracking-tighter mb-4">Lepaskan File Excel</h2>
+                  <p className="text-slate-500 font-bold uppercase tracking-widest text-xs sm:text-sm">
                     {authorizedProdi === 'SUPER_ADMIN' ? 'Update Seluruh Database Induk' : `Update Jadwal ${authorizedProdi}`}
                   </p>
                </div>
@@ -762,7 +809,7 @@
           {/* LOGIN MODAL */}
           {loginModal.open && (
             <div className="fixed inset-0 z-[400] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-md animate-in">
-                <div className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-[2.5rem] shadow-2xl border dark:border-slate-800 p-10 animate-scale-in">
+                <div className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-[2.5rem] shadow-2xl border dark:border-slate-800 p-8 sm:p-10 animate-scale-in">
                    <div className="flex flex-col items-center text-center mb-8">
                       <div className="bg-blue-600 p-4 rounded-3xl text-white mb-4 shadow-lg"><Lock size={32}/></div>
                       <h3 className="text-2xl font-black text-slate-800 dark:text-white uppercase leading-tight">Portal Kaprodi</h3>
@@ -785,11 +832,14 @@
             </div>
           )}
 
+          {/* IMPROVED TOAST: Fixed cutting off issue */}
           {toast && (
-            <div className="fixed top-8 left-1/2 -translate-x-1/2 z-[100] animate-in">
-              <div className="bg-slate-900 dark:bg-blue-600 text-white px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border border-white/10 backdrop-blur-md">
-                <BellRing size={16}/>
-                <p className="text-sm font-black uppercase tracking-tight">{toast}</p>
+            <div className="fixed top-8 left-1/2 -translate-x-1/2 z-[500] animate-in w-auto max-w-[90vw]">
+              <div className="bg-slate-900 dark:bg-blue-600 text-white px-5 py-3.5 rounded-2xl shadow-2xl flex items-center gap-3 border border-white/10 backdrop-blur-md">
+                <BellRing size={18} className="shrink-0 text-blue-200 dark:text-white/80"/>
+                <p className="text-[10px] sm:text-xs font-black uppercase tracking-widest leading-relaxed break-words">
+                  {toast}
+                </p>
               </div>
             </div>
           )}
@@ -798,27 +848,37 @@
             <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm animate-in">
                 <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-[2.5rem] shadow-2xl border dark:border-slate-800 p-8 animate-scale-in">
                    <div className="flex items-center gap-4 mb-6">
-                      <div className="bg-amber-100 dark:bg-amber-900/40 text-amber-600 p-3 rounded-2xl"><HelpCircle size={28}/></div>
-                      <h3 className="text-xl font-black text-slate-800 dark:text-white uppercase leading-tight">{confirmDialog.title}</h3>
+                      <div className="bg-amber-100 dark:bg-amber-900/40 text-amber-600 p-3 rounded-2xl shrink-0"><HelpCircle size={28}/></div>
+                      <h3 className="text-lg sm:text-xl font-black text-slate-800 dark:text-white uppercase leading-tight">{confirmDialog.title}</h3>
                    </div>
-                   <p className="text-slate-500 dark:text-slate-400 font-bold text-sm leading-relaxed mb-8 uppercase tracking-tight">{confirmDialog.message}</p>
-                   <div className="flex gap-3">
-                      <button onClick={() => setConfirmDialog({...confirmDialog, open: false})} className="flex-1 py-3.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl font-black text-[10px] uppercase transition-all">Batal</button>
-                      <button onClick={() => { confirmDialog.onConfirm(); setConfirmDialog({...confirmDialog, open: false}); }} className="flex-1 py-3.5 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg transition-all">Konfirmasi Cloud</button>
+                   <p className="text-slate-500 dark:text-slate-400 font-bold text-xs sm:text-sm leading-relaxed mb-8 uppercase tracking-tight">{confirmDialog.message}</p>
+                   <div className="flex flex-col sm:flex-row gap-3">
+                      <button onClick={() => setConfirmDialog({...confirmDialog, open: false})} className="flex-1 py-3.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl font-black text-[10px] uppercase transition-all order-2 sm:order-1">Batal</button>
+                      <button onClick={() => { confirmDialog.onConfirm(); setConfirmDialog({...confirmDialog, open: false}); }} className="flex-1 py-3.5 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg transition-all order-1 sm:order-2">Konfirmasi Cloud</button>
                    </div>
                 </div>
             </div>
           )}
 
-          <aside className={`no-print ${isSidebarOpen ? 'w-72' : 'w-20'} bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 transition-all duration-300 flex flex-col z-50 shadow-xl`}>
-            <div className="p-6 flex items-center gap-4 border-b dark:border-slate-800">
+          {isSidebarOpen && window.innerWidth <= 1024 && (
+            <div 
+              onClick={() => setSidebarOpen(false)} 
+              className="fixed inset-0 bg-slate-950/50 backdrop-blur-sm z-[45] lg:hidden"
+            ></div>
+          )}
+
+          <aside className={`no-print ${isSidebarOpen ? 'translate-x-0 w-72' : '-translate-x-full lg:translate-x-0 lg:w-20'} fixed lg:relative h-full bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 transition-all duration-300 flex flex-col z-50 shadow-xl`}>
+            <div className="p-6 flex items-center gap-4 border-b dark:border-slate-800 relative min-h-[80px]">
               <div className="bg-blue-600 p-2.5 rounded-2xl text-white shrink-0 shadow-lg"><Database size={24} /></div>
               {isSidebarOpen && (
-                <div>
-                  <h1 className="font-black text-xl uppercase tracking-tighter leading-none dark:text-white">Manajamen Jadwal UMB</h1>
-                  <p className="text-[10px] font-bold text-blue-500 uppercase tracking-widest mt-1">Cloud Edition</p>
+                <div className="overflow-hidden">
+                  <h1 className="font-black text-xs md:text-sm lg:text-lg uppercase tracking-tighter leading-tight dark:text-white break-words">
+                    Manajemen Jadwal UMB
+                  </h1>
+                  <p className="text-[9px] font-bold text-blue-500 uppercase tracking-widest mt-0.5">Cloud System</p>
                 </div>
               )}
+              <button onClick={() => setSidebarOpen(false)} className="lg:hidden absolute right-4 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-red-500"><X size={20}/></button>
             </div>
 
             <div className="flex-1 flex flex-col overflow-y-auto custom-scrollbar">
@@ -833,7 +893,7 @@
                         disabled={(authorizedProdi && authorizedProdi !== 'SUPER_ADMIN') || isLoadingData} 
                         value={selectedProdi} 
                         onChange={(e) => setSelectedProdi(e.target.value)} 
-                        className="w-full bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 p-3 rounded-2xl text-xs font-bold outline-none cursor-pointer dark:text-slate-200 disabled:opacity-50"
+                        className="w-full bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 p-3 rounded-2xl text-xs font-bold outline-none cursor-pointer dark:text-slate-200 disabled:opacity-50 appearance-none"
                     >
                       {cloudProdiList.length > 0 ? (
                         cloudProdiList.map(p => <option key={p} value={p}>{p}</option>)
@@ -841,9 +901,6 @@
                         <option disabled>Menunggu data Cloud...</option>
                       )}
                     </select>
-                    {cloudProdiList.length === 0 && !isLoadingData && (
-                        <p className="text-[8px] font-black text-red-500 uppercase px-2 mt-1 italic">Database Awan Kosong</p>
-                    )}
                   </div>
                 </div>
               )}
@@ -857,27 +914,27 @@
                 ].filter(item => item.public || authorizedProdi).map((item) => (
                   <button 
                     key={item.id} 
-                    onClick={() => { setActiveMenu(item.id); resetSwapFlow(); }} 
+                    onClick={() => { setActiveMenu(item.id); resetSwapFlow(); if (window.innerWidth <= 1024) setSidebarOpen(false); }} 
                     className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl font-bold text-sm transition-all ${activeMenu === item.id ? 'bg-blue-600 text-white shadow-xl shadow-blue-500/20' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800/50'}`}
                   >
-                    <item.icon size={20} />
-                    {isSidebarOpen && <span className="flex-1 text-left">{item.label}</span>}
+                    <item.icon size={20} className="shrink-0" />
+                    {(isSidebarOpen || window.innerWidth <= 1024) && <span className="flex-1 text-left truncate">{item.label}</span>}
                   </button>
                 ))}
               </nav>
             </div>
 
             <div className="p-4 border-t dark:border-slate-800">
-              {isSidebarOpen && (
-                <div className="bg-slate-50 dark:bg-slate-800/50 p-5 rounded-[2rem] border dark:border-slate-800 group">
+              {(isSidebarOpen || window.innerWidth <= 1024) && (
+                <div className="bg-slate-50 dark:bg-slate-800/50 p-4 sm:p-5 rounded-[2rem] border dark:border-slate-800 group">
                   {authorizedProdi ? (
                     <>
-                      <div className="flex items-center gap-3 mb-4">
-                        <div className={`w-10 h-10 rounded-2xl flex items-center justify-center text-white shadow-lg ${authorizedProdi === 'SUPER_ADMIN' ? 'bg-orange-500' : 'bg-emerald-500'}`}>
+                      <div className="flex items-center gap-3 mb-4 overflow-hidden">
+                        <div className={`w-10 h-10 rounded-2xl flex items-center justify-center text-white shadow-lg shrink-0 ${authorizedProdi === 'SUPER_ADMIN' ? 'bg-orange-500' : 'bg-emerald-500'}`}>
                             {authorizedProdi === 'SUPER_ADMIN' ? <Database size={20}/> : <User size={20} />}
                         </div>
                         <div className="flex-1 overflow-hidden">
-                          <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{authorizedProdi === 'SUPER_ADMIN' ? 'Full Access' : 'Kaprodi Aktif'}</p>
+                          <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest truncate">{authorizedProdi === 'SUPER_ADMIN' ? 'Full Access' : 'Kaprodi Aktif'}</p>
                           <p className="text-sm font-black truncate dark:text-white uppercase leading-none">{authorizedProdi}</p>
                         </div>
                       </div>
@@ -890,62 +947,59 @@
                       <Unlock size={16} /> Login Kaprodi
                     </button>
                   )}
-                  {/* Debugger Info */}
-                  <div className="mt-4 pt-4 border-t dark:border-slate-700 flex justify-between">
-                     <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Docs in Cloud:</span>
-                     <span className="text-[8px] font-black text-blue-500">{schedules.length}</span>
-                  </div>
                 </div>
               )}
             </div>
           </aside>
 
           <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-            <header className="no-print h-20 bg-white dark:bg-slate-900 border-b dark:border-slate-800 flex items-center justify-between px-8 shrink-0">
-              <div className="flex items-center gap-4">
-                <button onClick={() => setSidebarOpen(!isSidebarOpen)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all dark:text-slate-400"><Menu size={20} /></button>
-                <div className="relative w-80">
+            <header className="no-print h-auto py-4 lg:h-20 bg-white dark:bg-slate-900 border-b dark:border-slate-800 flex flex-col lg:flex-row items-center justify-between px-4 lg:px-8 shrink-0 gap-4">
+              <div className="flex items-center gap-4 w-full lg:w-auto">
+                <button onClick={() => setSidebarOpen(!isSidebarOpen)} className="p-2.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all dark:text-slate-400"><Menu size={20} /></button>
+                <div className="relative flex-1 lg:max-w-xs xl:max-w-md">
                   <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300 dark:text-slate-600" size={18} />
                   <input type="text" placeholder="Cari matkul, dosen..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full bg-slate-50 dark:bg-slate-800/50 border-none rounded-2xl pl-12 pr-4 py-2.5 text-sm font-medium outline-none dark:text-white dark:placeholder-slate-500" />
                 </div>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center justify-between lg:justify-end gap-3 w-full lg:w-auto">
                 <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[9px] font-black uppercase border transition-colors ${isOnline ? 'text-emerald-500 border-emerald-500/20' : 'text-red-500 border-red-500/20'}`}>
-                   {isOnline ? <Wifi size={12}/> : <WifiOff size={12}/>} {isOnline ? "Live Sync" : "Offline"}
+                   {isOnline ? <Wifi size={12}/> : <WifiOff size={12}/>} <span className="hidden sm:inline">{isOnline ? "Live Sync" : "Offline"}</span>
                 </div>
-                <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition-all">
-                  {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
-                </button>
-                {authorizedProdi === 'SUPER_ADMIN' && (
-                   <button onClick={() => fileInputRef.current.click()} className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 dark:bg-blue-600 text-white rounded-xl text-xs font-black shadow-md"><FileUp size={16} /> Update Jadwal</button>
-                )}
-                <input type="file" ref={fileInputRef} className="hidden" accept=".xlsx,.xls" onChange={handleFileUpload} />
+                <div className="flex items-center gap-2">
+                    <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition-all shrink-0">
+                      {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
+                    </button>
+                    {authorizedProdi === 'SUPER_ADMIN' && (
+                       <button onClick={() => fileInputRef.current.click()} className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 dark:bg-blue-600 text-white rounded-xl text-[10px] sm:text-xs font-black shadow-md shrink-0"><FileUp size={16} /> <span className="hidden sm:inline">Update Jadwal</span><span className="sm:hidden uppercase font-black">Excel</span></button>
+                    )}
+                    <input type="file" ref={fileInputRef} className="hidden" accept=".xlsx,.xls" onChange={handleFileUpload} />
+                </div>
               </div>
             </header>
 
-            <main className="flex-1 overflow-y-auto p-8 bg-slate-50/50 dark:bg-slate-950 custom-scrollbar main-content">
+            <main className="flex-1 overflow-y-auto p-4 lg:p-8 bg-slate-50/50 dark:bg-slate-950 custom-scrollbar main-content">
               <div className="max-w-7xl mx-auto">
                 {isLoadingData ? (
-                   <div className="flex flex-col items-center justify-center py-40">
-                      <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-6"></div>
-                      <h2 className="text-xl font-black text-slate-800 dark:text-white uppercase">Menghubungkan ke Cloud...</h2>
+                   <div className="flex flex-col items-center justify-center py-20 sm:py-40 text-center px-4">
+                      <div className="w-12 h-12 sm:w-16 sm:h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-6"></div>
+                      <h2 className="text-lg sm:text-xl font-black text-slate-800 dark:text-white uppercase">Menghubungkan ke Cloud...</h2>
                       <p className="text-slate-400 font-bold text-[10px] uppercase mt-2">Mendownload ribuan data jadwal UMB</p>
                       <button onClick={() => setIsLoadingData(false)} className="mt-8 px-6 py-2 bg-slate-200 dark:bg-slate-800 text-slate-500 rounded-xl text-[10px] font-black uppercase">Bypass Loading</button>
                    </div>
                 ) : schedules.length === 0 ? (
                   <div 
                     onDragEnter={handleDrag} onDragOver={handleDrag} onDrop={handleDrop}
-                    className={`flex flex-col items-center justify-center py-20 border-4 border-dashed rounded-[4rem] transition-all animate-in ${dragActive ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/10' : 'border-slate-200 dark:border-slate-800'}`}
+                    className={`flex flex-col items-center justify-center py-10 sm:py-20 px-4 sm:px-6 border-4 border-dashed rounded-[2.5rem] sm:rounded-[4rem] transition-all animate-in text-center ${dragActive ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/10' : 'border-slate-200 dark:border-slate-800'}`}
                   >
                     <div className="relative mb-10">
                        <div className="absolute -top-16 left-1/2 -translate-x-1/2 animate-bounce-slow text-blue-600 flex flex-col items-center gap-2">
-                          <span className="text-[10px] font-black uppercase tracking-widest bg-blue-50 dark:bg-slate-800 px-3 py-1 rounded-full shadow-sm border dark:border-slate-700">Database Cloud Kosong</span>
+                          <span className="text-[10px] font-black uppercase tracking-widest bg-blue-50 dark:bg-slate-800 px-3 py-1 rounded-full shadow-sm border dark:border-slate-700 whitespace-nowrap">Database Cloud Kosong</span>
                           <ArrowUp size={24} />
                        </div>
-                       <div className="w-40 h-40 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-[3.5rem] flex items-center justify-center shadow-inner border-4 border-white dark:border-slate-800"><UploadCloud size={72} /></div>
+                       <div className="w-24 h-24 sm:w-32 sm:h-32 lg:w-40 lg:h-40 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-[2rem] sm:rounded-[2.5rem] lg:rounded-[3.5rem] flex items-center justify-center shadow-inner border-4 border-white dark:border-slate-800 shrink-0"><UploadCloud size={64} /></div>
                     </div>
-                    <h2 className="text-4xl font-black text-slate-800 dark:text-white uppercase tracking-tighter">Awan Belum Ada Data</h2>
-                    <p className="text-slate-400 font-bold uppercase tracking-widest text-sm mt-4 text-center max-w-md">
+                    <h2 className="text-xl sm:text-2xl lg:text-4xl font-black text-slate-800 dark:text-white uppercase tracking-tighter leading-tight">Awan Belum Ada Data</h2>
+                    <p className="text-slate-400 font-bold uppercase tracking-widest text-[10px] lg:text-sm mt-4 text-center max-w-md leading-relaxed">
                       {authorizedProdi ? `Drag & Drop file Excel prodi "${authorizedProdi}" untuk sinkronisasi ke awan.` : "Silakan login Kaprodi untuk mengunggah jadwal ke database cloud."}
                     </p>
                   </div>
@@ -953,37 +1007,37 @@
                   <>
                     {activeMenu === 'dashboard' && (
                       <div className="animate-in">
-                        <div className="no-print grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
-                             <div className="bg-white dark:bg-slate-900 p-6 rounded-[2.5rem] border dark:border-slate-800 shadow-sm flex items-center gap-6">
-                                <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-3xl text-blue-600"><BarChart3 size={24}/></div>
-                                <div><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Matkul</p><p className="text-2xl font-black dark:text-white">{stats.totalMatkul}</p></div>
+                        <div className="no-print grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 lg:gap-6 mb-8 lg:mb-10">
+                             <div className="bg-white dark:bg-slate-900 p-5 sm:p-6 rounded-[2rem] border dark:border-slate-800 shadow-sm flex items-center gap-4 sm:gap-6 overflow-hidden">
+                                <div className="bg-blue-50 dark:bg-blue-900/20 p-3 sm:p-4 rounded-3xl text-blue-600 shrink-0"><BarChart3 size={24}/></div>
+                                <div className="min-w-0"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest truncate">Total Matkul</p><p className="text-xl sm:text-2xl font-black dark:text-white">{stats.totalMatkul}</p></div>
                              </div>
-                             <div className="bg-white dark:bg-slate-900 p-6 rounded-[2.5rem] border dark:border-slate-800 shadow-sm flex items-center gap-6">
-                                <div className="bg-emerald-50 dark:bg-emerald-900/20 p-4 rounded-3xl text-emerald-600"><Users2 size={24}/></div>
-                                <div><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Dosen Aktif</p><p className="text-2xl font-black dark:text-white">{stats.totalDosen}</p></div>
+                             <div className="bg-white dark:bg-slate-900 p-5 sm:p-6 rounded-[2rem] border dark:border-slate-800 shadow-sm flex items-center gap-4 sm:gap-6 overflow-hidden">
+                                <div className="bg-emerald-50 dark:bg-emerald-900/20 p-3 sm:p-4 rounded-3xl text-emerald-600 shrink-0"><Users2 size={24}/></div>
+                                <div className="min-w-0"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest truncate">Dosen Aktif</p><p className="text-xl sm:text-2xl font-black dark:text-white">{stats.totalDosen}</p></div>
                              </div>
-                             <div className="bg-white dark:bg-slate-900 p-6 rounded-[2.5rem] border dark:border-slate-800 shadow-sm flex items-center gap-6">
-                                <div className="bg-indigo-50 dark:bg-indigo-900/20 p-4 rounded-3xl text-indigo-600"><Building2 size={24}/></div>
-                                <div><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Ruangan Digunakan</p><p className="text-2xl font-black dark:text-white">{stats.totalRuang}</p></div>
+                             <div className="bg-white dark:bg-slate-900 p-5 sm:p-6 rounded-[2rem] border dark:border-slate-800 shadow-sm flex items-center gap-4 sm:gap-6 sm:col-span-2 lg:col-span-1 overflow-hidden">
+                                <div className="bg-indigo-50 dark:bg-indigo-900/20 p-3 sm:p-4 rounded-3xl text-indigo-600 shrink-0"><Building2 size={24}/></div>
+                                <div className="min-w-0"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest truncate">Ruang Aktif</p><p className="text-xl sm:text-2xl font-black dark:text-white">{stats.totalRuang}</p></div>
                              </div>
                         </div>
 
-                        <div className="no-print mb-8 flex items-end justify-between flex-wrap gap-4">
-                          <div>
-                            <div className="flex items-center gap-3">
-                              <h2 className="text-3xl font-black text-slate-800 dark:text-white tracking-tighter uppercase leading-none">{selectedProdi}</h2>
-                              <span className="bg-blue-600 text-white text-[10px] font-black px-3 py-1 rounded-full uppercase shadow-lg shadow-blue-500/20">
-                                {searchTerm ? `${filteredSchedules.length} Hasil Filter` : `${filteredSchedules.length} Mata Kuliah`}
+                        <div className="no-print mb-8 flex flex-col lg:flex-row lg:items-end justify-between gap-6">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-3">
+                              <h2 className="text-xl sm:text-2xl lg:text-3xl font-black text-slate-800 dark:text-white tracking-tighter uppercase leading-none break-word-custom">{selectedProdi}</h2>
+                              <span className="bg-blue-600 text-white text-[9px] font-black px-3 py-1 rounded-full uppercase shadow-lg shadow-blue-500/20 whitespace-nowrap">
+                                {searchTerm ? `${filteredSchedules.length} Hasil` : `${filteredSchedules.length} Matkul`}
                               </span>
                             </div>
-                            <p className="text-slate-400 dark:text-slate-500 font-bold text-xs uppercase tracking-widest mt-2">Visualisasi Jadwal Cloud Real-time</p>
+                            <p className="text-slate-400 dark:text-slate-500 font-bold text-[10px] uppercase tracking-widest mt-2">Visualisasi Jadwal Cloud Real-time</p>
                           </div>
-                          <div className="flex gap-2">
+                          <div className="flex flex-wrap gap-2">
                              {authorizedProdi === 'SUPER_ADMIN' && (
-                                <button onClick={handleClearAll} className="flex items-center gap-2 px-4 py-3 bg-red-50 dark:bg-red-900/20 text-red-600 rounded-2xl font-black text-[10px] uppercase shadow-sm hover:bg-red-600 hover:text-white transition-all"><Trash2 size={16} /> Kosongkan Data</button>
+                                <button onClick={handleClearAll} className="flex-1 lg:flex-none flex items-center justify-center gap-2 px-4 py-3 bg-red-50 dark:bg-red-900/20 text-red-600 rounded-2xl font-black text-[10px] uppercase shadow-sm hover:bg-red-600 hover:text-white transition-all"><Trash2 size={16} className="shrink-0"/> <span className="hidden sm:inline">Hapus Database</span><span className="sm:hidden">Reset</span></button>
                              )}
-                             <button onClick={downloadExcel} className="flex items-center gap-2 px-4 py-3 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl font-black text-[10px] uppercase shadow-sm hover:bg-slate-900 hover:text-white transition-all"><Download size={16} /> Export Excel</button>
-                             <button onClick={() => window.print()} className="flex items-center gap-2 px-6 py-3 bg-slate-900 dark:bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg hover:opacity-90 transition-all"><Printer size={16} /> Cetak Laporan</button>
+                             <button onClick={downloadExcel} className="flex-1 lg:flex-none flex items-center justify-center gap-2 px-4 py-3 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl font-black text-[10px] uppercase shadow-sm hover:bg-slate-900 hover:text-white transition-all"><Download size={16} className="shrink-0"/> <span className="hidden sm:inline">Download Excel</span><span className="sm:hidden">Excel</span></button>
+                             <button onClick={() => window.print()} className="flex-1 lg:flex-none flex items-center justify-center gap-2 px-6 py-3 bg-slate-900 dark:bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg hover:opacity-90 transition-all"><Printer size={16} className="shrink-0"/> Cetak PDF</button>
                           </div>
                         </div>
 
@@ -994,36 +1048,35 @@
                             <SortButton label="Ruangan" sortKey="ruangan" />
                         </div>
 
-                        <div className="no-print grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        <div className="no-print grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 lg:gap-6">
                           {filteredSchedules.map((item) => (
-                            <div key={item.id} className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-[2.5rem] p-6 shadow-sm hover:shadow-2xl transition-all flex flex-col group relative overflow-hidden">
+                            <div key={item.id} className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-[2rem] p-5 lg:p-6 shadow-sm hover:shadow-2xl transition-all flex flex-col group relative overflow-hidden h-full">
                               <div className="mb-4">
-                                <div className="flex justify-between items-start mb-3">
-                                  <span className="bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-[10px] font-black px-2 py-1 rounded-lg uppercase">{item.kelas} • SMT {item.semester}</span>
-                                  <span className="text-[10px] font-bold text-slate-300 dark:text-slate-600 uppercase tracking-tight">{item.sks} SKS</span>
+                                <div className="flex justify-between items-start mb-3 gap-2">
+                                  <span className="bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-[10px] font-black px-2 py-1 rounded-lg uppercase whitespace-nowrap truncate max-w-[120px]">{item.kelas} • SMT {item.semester}</span>
+                                  <span className="text-[10px] font-bold text-slate-300 dark:text-slate-600 uppercase tracking-tight shrink-0">{item.sks} SKS</span>
                                 </div>
-                                <h3 className="text-lg font-bold text-slate-800 dark:text-white leading-tight h-12 line-clamp-2 uppercase group-hover:text-blue-600">{item.matkul}</h3>
-                                <p className="text-xs font-black text-blue-500 dark:text-blue-400 mt-2 uppercase truncate">{item.dosen}</p>
+                                <h3 className="text-base lg:text-lg font-bold text-slate-800 dark:text-white leading-tight h-12 line-clamp-2 uppercase group-hover:text-blue-600 break-word-custom">{item.matkul}</h3>
+                                <p className="text-[11px] font-black text-blue-500 dark:text-blue-400 mt-2 uppercase truncate break-word-custom">{item.dosen}</p>
                               </div>
 
-                              {/* Tombol Detail Perubahan Jika Ada History */}
                               {item.keterangan_rapat && item.keterangan_rapat !== '-' && (
-                                <div className="mb-4 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-900/30 rounded-[1.5rem]">
-                                  <p className="text-[9px] font-black text-amber-700 dark:text-amber-400 uppercase mb-2 flex items-center gap-1">
-                                    <AlertTriangle size={12}/> Jadwal Diperbarui
+                                <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-900/30 rounded-[1.25rem]">
+                                  <p className="text-[8px] font-black text-amber-700 dark:text-amber-400 uppercase mb-2 flex items-center gap-1">
+                                    <AlertTriangle size={10} className="shrink-0"/> Jadwal Diperbarui
                                   </p>
                                   <button 
                                     onClick={() => setActiveMenu('history')} 
-                                    className="w-full py-2 bg-amber-600 text-white rounded-xl text-[9px] font-black uppercase flex items-center justify-center gap-2 hover:bg-amber-700 transition-colors"
+                                    className="w-full py-2 bg-amber-600 text-white rounded-xl text-[8px] font-black uppercase flex items-center justify-center gap-2 hover:bg-amber-700 transition-colors"
                                   >
-                                    <History size={14}/> Detail Perubahan
+                                    <History size={12}/> Detail Riwayat
                                   </button>
                                 </div>
                               )}
 
-                              <div className="mt-auto bg-slate-50 dark:bg-slate-800/50 rounded-3xl p-4 space-y-2 border border-transparent dark:border-slate-800/50">
-                                <div className="flex items-center gap-3 text-xs font-bold text-slate-600 dark:text-slate-400"><Calendar size={14} className="text-blue-500" /><span>{item.hari}, {item.waktu}</span></div>
-                                <div className="flex items-center gap-3 text-xs font-bold text-slate-600 dark:text-slate-400"><MapPin size={14} className="text-indigo-500" /><span>{item.ruangan}</span></div>
+                              <div className="mt-auto bg-slate-50 dark:bg-slate-800/50 rounded-2xl p-4 space-y-2 border border-transparent dark:border-slate-800/50">
+                                <div className="flex items-center gap-3 text-[11px] font-bold text-slate-600 dark:text-slate-400 min-w-0"><Calendar size={13} className="text-blue-500 shrink-0" /><span className="truncate">{item.hari}, {item.waktu}</span></div>
+                                <div className="flex items-center gap-3 text-[11px] font-bold text-slate-600 dark:text-slate-400 min-w-0"><MapPin size={13} className="text-indigo-500 shrink-0" /><span className="truncate">{item.ruangan}</span></div>
                               </div>
                             </div>
                           ))} 
@@ -1032,44 +1085,46 @@
                     )}
 
                     {activeMenu === 'scanner' && (
-                      <div className="animate-in space-y-8">
-                        <div className="bg-white dark:bg-slate-900 p-10 rounded-[3.5rem] shadow-sm border dark:border-slate-800">
-                          <h2 className="text-3xl font-black text-slate-800 dark:text-white tracking-tight uppercase leading-none mb-8">Cari Ruangan Kosong</h2>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                            <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">Pilih Hari</label><select value={scanConfig.hari} onChange={(e) => setScanConfig({...scanConfig, hari: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 p-4 rounded-2xl font-bold dark:text-slate-200 outline-none">{DAYS_ORDER.map(d => <option key={d} value={d}>{d}</option>)}</select></div>
+                      <div className="animate-in space-y-6 sm:space-y-8">
+                        <div className="bg-white dark:bg-slate-900 p-6 sm:p-10 rounded-[2.5rem] lg:rounded-[3.5rem] shadow-sm border dark:border-slate-800">
+                          <h2 className="text-xl sm:text-2xl lg:text-3xl font-black text-slate-800 dark:text-white tracking-tight uppercase leading-none mb-8 break-word-custom">Cari Ruangan Kosong</h2>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 lg:gap-8">
+                            <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">Pilih Hari</label><select value={scanConfig.hari} onChange={(e) => setScanConfig({...scanConfig, hari: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 p-4 rounded-2xl font-bold dark:text-slate-200 outline-none text-sm appearance-none">{DAYS_ORDER.map(d => <option key={d} value={d}>{d}</option>)}</select></div>
                             <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">Pilih Jam</label>
-                              <select value={scanConfig.waktu} onChange={(e) => setScanConfig({...scanConfig, waktu: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 p-4 rounded-2xl font-bold dark:text-slate-200 outline-none">
-                                <option value="Semua Jam">Semua Jam</option>
+                              <select value={scanConfig.waktu} onChange={(e) => setScanConfig({...scanConfig, waktu: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 p-4 rounded-2xl font-bold dark:text-slate-200 outline-none text-sm appearance-none">
+                                <option value="Semua Jam">Semua Jam Pelajaran</option>
                                 {TIMES_SLOTS.map(t => <option key={t} value={t}>{t}</option>)}
                               </select>
                             </div>
                           </div>
                         </div>
-                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-8">
                           <div className="lg:col-span-1 space-y-6">
-                            <h4 className="text-sm font-black text-emerald-600 uppercase tracking-widest px-4">Tersedia ({scannerData.free.length})</h4>
-                            <div className="grid grid-cols-1 gap-4 max-h-[800px] overflow-y-auto pr-2 custom-scrollbar">
-                              {scannerData.free.map((item, idx) => (
-                                <div key={idx} className="bg-white dark:bg-slate-900 border-2 border-emerald-50 dark:border-emerald-900/10 p-5 rounded-[2.5rem] flex items-center justify-between shadow-sm hover:border-emerald-500 transition-all">
-                                  <div className="flex flex-col"><p className="text-slate-800 dark:text-white font-black text-lg">{item.room}</p><p className="text-[9px] font-black text-slate-400 uppercase">{item.time}</p></div>
-                                  <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 rounded-full text-[9px] font-black uppercase">Kosong</div>
+                            <div className="flex items-center justify-between px-4">
+                               <h4 className="text-[11px] lg:text-sm font-black text-emerald-600 uppercase tracking-widest shrink-0">Tersedia ({scannerData.free.length})</h4>
+                            </div>
+                            <div className="grid grid-cols-1 gap-4 max-h-[500px] lg:max-h-[800px] overflow-y-auto pr-2 custom-scrollbar p-1">
+                              {scannerData.free.length > 0 ? scannerData.free.map((item, idx) => (
+                                <div key={idx} className="bg-white dark:bg-slate-900 border-2 border-emerald-50 dark:border-emerald-900/10 p-5 rounded-[2rem] flex items-center justify-between shadow-sm hover:border-emerald-500 transition-all gap-4 overflow-hidden">
+                                  <div className="flex flex-col min-w-0"><p className="text-slate-800 dark:text-white font-black text-base lg:text-lg truncate">{item.room}</p><p className="text-[9px] font-black text-slate-400 uppercase truncate">{item.time}</p></div>
+                                  <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 rounded-full text-[9px] font-black uppercase shrink-0">Bebas</div>
                                 </div>
-                              ))}
+                              )) : <p className="text-[10px] font-black text-slate-400 text-center py-10 uppercase italic">Tidak ada ruang tersedia</p>}
                             </div>
                           </div>
                           <div className="lg:col-span-2 space-y-6">
-                            <div className="flex items-center justify-between px-4">
-                                <h4 className="text-sm font-black text-red-500 uppercase tracking-widest">Terisi ({scannerData.occupied.length})</h4>
-                                <div className="relative w-48"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} /><input type="text" placeholder="Cari..." value={occupiedSearch} onChange={(e) => setOccupiedSearch(e.target.value)} className="w-full bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-xl pl-9 pr-3 py-1.5 text-[10px] font-bold outline-none" /></div>
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between px-4 gap-4">
+                                <h4 className="text-[11px] lg:text-sm font-black text-red-500 uppercase tracking-widest shrink-0">Terisi ({scannerData.occupied.length})</h4>
+                                <div className="relative w-full sm:w-64"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} /><input type="text" placeholder="Cari ruangan atau prodi..." value={occupiedSearch} onChange={(e) => setOccupiedSearch(e.target.value)} className="w-full bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-xl pl-9 pr-3 py-2 text-[10px] font-bold outline-none" /></div>
                             </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[800px] overflow-y-auto pr-2 custom-scrollbar">
-                              {scannerData.occupied.map((s, idx) => (
-                                <div key={idx} className="bg-white dark:bg-slate-900 border dark:border-slate-800 p-5 rounded-3xl shadow-sm border-l-4 border-l-red-500 flex flex-col gap-2">
-                                  <div className="flex justify-between items-start"><span className="text-xs font-black text-slate-800 dark:text-white bg-slate-100 dark:bg-slate-800 px-3 py-1 rounded-lg uppercase">{s.ruangan}</span><span className="text-[9px] font-black text-blue-600 uppercase bg-blue-50 dark:bg-blue-900/50 px-2 py-0.5 rounded-md">{s.prodi}</span></div>
-                                  <p className="text-xs font-bold text-slate-700 dark:text-slate-300 leading-tight uppercase line-clamp-1">{s.matkul}</p>
-                                  <div className="mt-auto pt-2 border-t dark:border-slate-800 flex justify-between items-center"><p className="text-[10px] font-black text-slate-500 uppercase truncate max-w-[120px]">{s.dosen}</p><p className="text-[9px] font-black text-red-500 uppercase tracking-tight">{s.waktu}</p></div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[500px] lg:max-h-[800px] overflow-y-auto pr-2 custom-scrollbar p-1">
+                              {scannerData.occupied.length > 0 ? scannerData.occupied.map((s, idx) => (
+                                <div key={idx} className="bg-white dark:bg-slate-900 border dark:border-slate-800 p-5 rounded-2xl shadow-sm border-l-4 border-l-red-500 flex flex-col gap-2 overflow-hidden">
+                                  <div className="flex justify-between items-start gap-4"><span className="text-[10px] lg:text-xs font-black text-slate-800 dark:text-white bg-slate-100 dark:bg-slate-800 px-3 py-1 rounded-lg uppercase truncate min-w-0">{s.ruangan}</span><span className="text-[8px] lg:text-[9px] font-black text-blue-600 uppercase bg-blue-50 dark:bg-blue-900/50 px-2 py-0.5 rounded-md truncate shrink-0">{s.prodi}</span></div>
+                                  <p className="text-[11px] lg:text-xs font-bold text-slate-700 dark:text-slate-300 leading-tight uppercase line-clamp-1 break-word-custom">{s.matkul}</p>
+                                  <div className="mt-auto pt-2 border-t dark:border-slate-800 flex justify-between items-center gap-4 min-w-0"><p className="text-[9px] lg:text-[10px] font-black text-slate-500 uppercase truncate min-w-0">{s.dosen}</p><p className="text-[8px] lg:text-[9px] font-black text-red-500 uppercase tracking-tight shrink-0">{s.waktu}</p></div>
                                 </div>
-                              ))}
+                              )) : <p className="text-[10px] font-black text-slate-400 text-center py-10 uppercase italic">Tidak ada ruangan terisi</p>}
                             </div>
                           </div>
                         </div>
@@ -1078,33 +1133,43 @@
 
                     {activeMenu === 'swap' && authorizedProdi && (
                       <div className="animate-in space-y-6">
-                        <div className="bg-white dark:bg-slate-900 p-8 rounded-[3.5rem] shadow-sm border dark:border-slate-800">
-                          <div className="flex items-center justify-between mb-8 pb-6 border-b dark:border-slate-800">
-                             <div className="flex items-center gap-4"><div className="bg-orange-500 p-3 rounded-2xl text-white shadow-lg"><RefreshCw size={24} /></div><div><h2 className="text-2xl font-black text-slate-800 dark:text-white uppercase leading-none">Manajemen Pertukaran {authorizedProdi}</h2></div></div>
-                             {swapMode !== 'menu' && (<button onClick={handleStepBack} className="flex items-center gap-2 px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl text-xs font-black uppercase"><ArrowLeft size={16} /> Kembali</button>)}
+                        <div className="bg-white dark:bg-slate-900 p-5 sm:p-8 rounded-[2.5rem] lg:rounded-[3.5rem] shadow-sm border dark:border-slate-800">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-8 pb-6 border-b dark:border-slate-800 gap-4">
+                             <div className="flex items-center gap-4"><div className="bg-orange-500 p-3 rounded-2xl text-white shadow-lg shrink-0"><RefreshCw size={24} /></div><h2 className="text-xl lg:text-2xl font-black text-slate-800 dark:text-white uppercase leading-none break-word-custom">Manajemen Pertukaran</h2></div>
+                             {swapMode !== 'menu' && (<button onClick={handleStepBack} className="flex items-center justify-center gap-2 px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl text-[10px] sm:text-xs font-black uppercase shrink-0"><ArrowLeft size={16} /> Kembali</button>)}
                           </div>
                           {swapMode === 'menu' && (
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                              <button onClick={() => setSwapMode('advanced-swap')} className="group p-10 bg-slate-50 dark:bg-slate-800 border-2 border-transparent hover:border-blue-500 rounded-[3rem] transition-all text-left"><div className="bg-blue-600 w-14 h-14 rounded-2xl flex items-center justify-center text-white mb-6 shadow-xl"><ArrowRightLeft size={28} /></div><h3 className="text-xl font-black text-slate-800 dark:text-white uppercase">Advanced Swap</h3><p className="text-xs font-bold text-slate-500 mt-2">Menukar satu jadwal dengan jadwal lain (Auto-Detect SKS).</p></button>
-                              <button onClick={() => setSwapMode('move')} className="group p-10 bg-slate-50 dark:bg-slate-800 border-2 border-transparent hover:border-emerald-500 rounded-[3rem] transition-all text-left"><div className="bg-emerald-600 w-14 h-14 rounded-2xl flex items-center justify-center text-white mb-6 shadow-xl"><FileUp size={28} /></div><h3 className="text-xl font-black text-slate-800 dark:text-white uppercase">Move to Empty Slot</h3><p className="text-xs font-bold text-slate-500 mt-2">Memindahkan jadwal ke slot hari yang kosong.</p></button>
+                              {/* Tombol Swap (Tampil untuk semua yang login) */}
+                              <button onClick={() => setSwapMode('advanced-swap')} className="group p-8 sm:p-10 bg-slate-50 dark:bg-slate-800 border-2 border-transparent hover:border-blue-500 rounded-[2.5rem] transition-all text-left flex flex-col items-start"><div className="bg-blue-600 w-12 h-12 lg:w-14 lg:h-14 rounded-2xl flex items-center justify-center text-white mb-6 shadow-xl shrink-0"><ArrowRightLeft size={24} /></div><h3 className="text-lg lg:text-xl font-black text-slate-800 dark:text-white uppercase leading-tight">Advanced Swap</h3><p className="text-[10px] lg:text-xs font-bold text-slate-500 mt-2 leading-relaxed">Menukar satu jadwal dengan jadwal lain secara otomatis.</p></button>
+
+                              {/* Poin 2: Filter Menu Move Hanya untuk Super Admin */}
+                              {authorizedProdi === 'SUPER_ADMIN' ? (
+                                <button onClick={() => setSwapMode('move')} className="group p-8 sm:p-10 bg-slate-50 dark:bg-slate-800 border-2 border-transparent hover:border-emerald-500 rounded-[2.5rem] transition-all text-left flex flex-col items-start"><div className="bg-emerald-600 w-12 h-12 lg:w-14 lg:h-14 rounded-2xl flex items-center justify-center text-white mb-6 shadow-xl shrink-0"><FileUp size={24} /></div><h3 className="text-lg lg:text-xl font-black text-slate-800 dark:text-white uppercase leading-tight">Move to Empty Slot</h3><p className="text-[10px] lg:text-xs font-bold text-slate-500 mt-2 leading-relaxed">Memindahkan jadwal ke slot hari yang benar-benar kosong.</p></button>
+                              ) : (
+                                <div className="p-8 sm:p-10 bg-slate-50 dark:bg-slate-900 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-[2.5rem] opacity-40 flex flex-col items-center justify-center text-center">
+                                  <Lock size={24} className="mb-4 text-slate-400" />
+                                  <h3 className="text-xs font-black uppercase text-slate-400">Pindah Slot Terkunci</h3>
+                                  <p className="text-[9px] font-bold text-slate-400 mt-1 uppercase">Hubungi Super Admin untuk akses ini</p>
+                                </div>
+                              )}
                             </div>
                           )}
                           {swapMode !== 'menu' && (
                             <div className="space-y-8 animate-in">
-                              <div className="flex flex-col md:flex-row items-start md:items-center gap-6 px-4">
+                              <div className="flex items-center gap-4 lg:gap-6 px-1 overflow-x-auto pb-4 custom-scrollbar snap-x no-print">
                                 {[
                                   { s: 1, label: "Pilih Dosen", val: swapStep > 1 ? swapDosenAsal : null }, 
-                                  { s: 2, label: "Matkul Asal", val: swapStep > 2 ? `${swapMatkulAsal?.matkul} (${swapMatkulAsal?.kelas})` : null }, 
+                                  { s: 2, label: "Matkul Asal", val: swapStep > 2 ? `${swapMatkulAsal?.matkul}` : null }, 
                                   { s: 3, label: swapMode === 'advanced-swap' ? "Matkul Swap" : "Slot Kosong" }
                                 ].map((step) => (
-                                  <div key={step.s} className="flex flex-col gap-1 min-w-[120px]">
+                                  <div key={step.s} className="flex flex-col gap-1 min-w-[140px] shrink-0 snap-start">
                                     <div className="flex items-center gap-2">
-                                      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-black transition-all ${swapStep >= step.s ? 'bg-blue-600 text-white shadow-lg' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>{step.s}</div>
-                                      <span className={`text-[9px] font-black uppercase tracking-widest ${swapStep === step.s ? 'text-blue-600' : 'text-slate-400'}`}>{step.label}</span>
-                                      {step.s < 3 && <div className={`hidden md:block w-8 h-0.5 rounded ml-2 ${swapStep > step.s ? 'bg-blue-600' : 'bg-slate-100 dark:bg-slate-800'}`}></div>}
+                                      <div className={`w-7 h-7 lg:w-8 lg:h-8 rounded-full flex items-center justify-center text-[10px] font-black transition-all shrink-0 ${swapStep >= step.s ? 'bg-blue-600 text-white shadow-lg' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>{step.s}</div>
+                                      <span className={`text-[9px] font-black uppercase tracking-widest truncate ${swapStep === step.s ? 'text-blue-600' : 'text-slate-400'}`}>{step.label}</span>
                                     </div>
                                     {step.val && (
-                                      <div className="ml-10 text-[10px] font-bold text-blue-500 dark:text-blue-400 uppercase tracking-tighter truncate max-w-[180px] animate-in">
+                                      <div className="ml-9 lg:ml-10 text-[9px] lg:text-[10px] font-bold text-blue-500 dark:text-blue-400 uppercase tracking-tighter truncate max-w-[120px] lg:max-w-[180px] animate-in">
                                         {step.val}
                                       </div>
                                     )}
@@ -1112,12 +1177,12 @@
                                 ))}
                               </div>
                               {swapStep === 1 && (
-                                <div className="animate-in grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                                <div className="animate-in grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar p-1">
                                   {[...new Set(schedules.filter(s => s.prodi === selectedProdi).map(s => s.dosen))].sort().map(dosen => (
                                     <button 
                                       key={dosen} 
                                       onClick={() => { setSwapDosenAsal(dosen); setSwapStep(2); }} 
-                                      className="p-5 bg-slate-50 dark:bg-slate-800 border dark:border-slate-800 rounded-3xl text-left hover:border-blue-500 transition-all uppercase text-xs font-black"
+                                      className="p-5 bg-slate-50 dark:bg-slate-800 border dark:border-slate-800 rounded-2xl sm:rounded-3xl text-left hover:border-blue-500 transition-all uppercase text-[10px] lg:text-xs font-black overflow-hidden truncate h-full"
                                     >
                                       {dosen}
                                     </button>
@@ -1127,17 +1192,15 @@
                               {swapStep === 2 && (
                                 <div className="animate-in grid grid-cols-1 md:grid-cols-2 gap-4">
                                   {sortSchedulesByDay(schedules.filter(s => s.dosen === swapDosenAsal && (authorizedProdi === 'SUPER_ADMIN' ? true : s.prodi === authorizedProdi))).map(item => (
-                                    <button key={item.id} onClick={() => { setSwapMatkulAsal(item); setSwapStep(3); }} className="p-8 bg-white dark:bg-slate-800 border-2 border-transparent hover:border-blue-500 rounded-[2.5rem] shadow-sm text-left group">
-                                      <div className="flex justify-between mb-2">
-                                        <span className="text-[10px] font-black text-blue-600 bg-blue-50 dark:bg-blue-900/40 px-2 py-0.5 rounded-md uppercase">{item.hari} • {item.kelas}</span>
-                                        <div className="flex gap-2">
-                                          <span className="text-[10px] font-black text-violet-600">{item.sks} SKS</span>
-                                        </div>
+                                    <button key={item.id} onClick={() => { setSwapMatkulAsal(item); setSwapStep(3); }} className="p-6 sm:p-8 bg-white dark:bg-slate-800 border-2 border-transparent hover:border-blue-500 rounded-[2rem] shadow-sm text-left group overflow-hidden flex flex-col h-full">
+                                      <div className="flex justify-between mb-2 gap-4 overflow-hidden">
+                                        <span className="text-[9px] lg:text-[10px] font-black text-blue-600 bg-blue-50 dark:bg-blue-900/40 px-2 py-0.5 rounded-md uppercase truncate shrink min-w-0">{item.hari} • {item.kelas}</span>
+                                        <span className="text-[9px] lg:text-[10px] font-black text-violet-600 whitespace-nowrap shrink-0">{item.sks} SKS</span>
                                       </div>
-                                      <h5 className="font-black text-slate-800 dark:text-white text-base leading-tight uppercase group-hover:text-blue-600">{item.matkul}</h5>
-                                      <div className="mt-4 text-[11px] font-bold text-slate-400 uppercase tracking-tight flex items-center gap-4">
-                                        <span>{item.waktu}</span>
-                                        <span className="bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded-lg">R: {item.ruangan}</span>
+                                      <h5 className="font-black text-slate-800 dark:text-white text-sm lg:text-base leading-tight uppercase group-hover:text-blue-600 line-clamp-2 break-word-custom">{item.matkul}</h5>
+                                      <div className="mt-4 text-[10px] lg:text-[11px] font-bold text-slate-400 uppercase tracking-tight flex items-center gap-4 truncate">
+                                        <span className="shrink-0">{item.waktu}</span>
+                                        <span className="bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded-lg truncate shrink min-w-0">R: {item.ruangan}</span>
                                       </div>
                                     </button>
                                   ))}
@@ -1145,66 +1208,104 @@
                               )}
                               {swapStep === 3 && (
                                 <div className="animate-in space-y-8">
-                                  <div className="flex flex-col md:flex-row gap-4">
-                                    <div className="flex-1 p-6 bg-orange-50 dark:bg-orange-500/10 rounded-[2rem] border-2 border-orange-100 dark:border-orange-500/20">
-                                      <p className="text-[10px] font-black text-orange-600 uppercase mb-2">Asal Jadwal ({swapMatkulAsal.sks} SKS):</p>
-                                      <h5 className="text-base font-black text-slate-800 dark:text-white uppercase leading-tight line-clamp-1">{swapMatkulAsal.matkul} ({swapMatkulAsal.kelas})</h5>
-                                      <p className="text-[10px] font-bold text-slate-500 mt-1">{swapMatkulAsal.hari}, {swapMatkulAsal.waktu} [{swapMatkulAsal.ruangan}]</p>
-                                    </div>
-                                    <div className="flex-1 p-6 bg-white dark:bg-slate-900 rounded-[2rem] border-2 border-slate-200 dark:border-slate-800">
-                                      <p className="text-[10px] font-black text-blue-600 uppercase mb-2">Berita Acara / Alasan:</p>
-                                      <textarea rows="2" value={swapReason} onChange={(e) => setSwapReason(e.target.value)} placeholder="Tulis alasan perubahan..." className="w-full bg-slate-50 dark:bg-slate-800 border-none px-4 py-3 rounded-xl text-xs font-bold outline-none resize-none dark:text-white" />
-                                    </div>
+                                  {/* 1. Input Alasan (Tampil untuk Move & Swap) */}
+                                  <div className="p-5 lg:p-6 bg-white dark:bg-slate-900 rounded-[2.5rem] border-2 border-slate-200 dark:border-slate-800">
+                                    <p className="text-[9px] font-black text-blue-600 uppercase mb-2">Berita Acara / Alasan:</p>
+                                    <textarea 
+                                      rows="2" 
+                                      value={swapReason} 
+                                      onChange={(e) => setSwapReason(e.target.value)} 
+                                      placeholder="Isi alasan perubahan jadwal..." 
+                                      className="w-full bg-slate-50 dark:bg-slate-800 border-none p-4 rounded-2xl text-[10px] font-bold outline-none dark:text-white" 
+                                    />
                                   </div>
+
+                                  {/* 2. Filter Hari (Muncul untuk Move & Swap) */}
                                   <div className="flex flex-wrap gap-2 justify-center mb-6">
-                                    {["Semua", ...DAYS_ORDER].map(day => (
-                                      <button key={day} onClick={() => setSwapDayFilter(day)} 
-                                        className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase ${swapDayFilter === day ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>
+                                    {swapMode === 'advanced-swap' && (
+                                      <button 
+                                        onClick={() => setSwapDayFilter('Semua')}
+                                        className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${swapDayFilter === 'Semua' ? 'bg-blue-600 text-white shadow-lg' : 'bg-slate-100 text-slate-400'}`}
+                                      >
+                                        Semua
+                                      </button>
+                                    )}
+                                    {DAYS_ORDER.map(day => (
+                                      <button 
+                                        key={day} 
+                                        type="button"
+                                        onClick={() => {
+                                          if(swapMode === 'move') setSwapTargetDay(day);
+                                          setSwapDayFilter(day);
+                                        }}
+                                        className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${(swapMode === 'move' ? swapTargetDay === day : swapDayFilter === day) ? 'bg-blue-600 text-white shadow-lg' : 'bg-slate-100 text-slate-400'}`}
+                                      >
                                         {day}
                                       </button>
                                     ))}
                                   </div>
-                                  <div className="space-y-6">
+
+                                  {/* 3. Area Konten Berdasarkan Mode */}
+                                  {swapMode === 'move' ? (
+                                    /* --- TAMPILAN MOVE TO EMPTY (FIXED) --- */
+                                    <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3 max-h-96 overflow-y-auto p-1 custom-scrollbar">
+                                      {moveOptions.length > 0 ? moveOptions.map((opt, i) => (
+                                        <button 
+                                          key={i} 
+                                          type="button"
+                                          disabled={!swapReason.trim()} 
+                                          onClick={() => executeMove(opt)} 
+                                          className="p-4 bg-white dark:bg-slate-900 border-2 border-slate-100 dark:border-slate-800 rounded-3xl text-center shadow-sm hover:border-emerald-500 disabled:opacity-30 transition-all group"
+                                        >
+                                          <p className="text-[8px] font-black text-slate-400 mb-1 group-hover:text-emerald-500 uppercase">{opt.waktu}</p>
+                                          <p className="text-sm font-black text-slate-800 dark:text-white uppercase truncate">R. {opt.ruangan}</p>
+                                        </button>
+                                      )) : (
+                                        <div className="col-span-full py-10 text-center opacity-30 text-[10px] font-black uppercase italic">
+                                          Tidak ada slot kosong pada hari {swapTargetDay}
+                                        </div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    /* --- MENU ADVANCED SWAP (RESTORED INFO SKS) --- */
+                                    <div className="space-y-6">
                                     {swapMode === 'advanced-swap' ? (
                                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         {swapSafeCandidates.length > 0 ? swapSafeCandidates.map(target => {
                                           const isDiffSks = target.sks !== swapMatkulAsal.sks;
                                           return (
-                                            <button key={target.id} disabled={!swapReason.trim()} onClick={() => executeSwap(target)} className={`p-6 bg-white dark:bg-slate-900 border-2 ${isDiffSks ? 'border-amber-200 dark:border-amber-900/40' : 'border-emerald-50'} hover:border-emerald-500 rounded-[2rem] text-left transition-all disabled:opacity-30 group shadow-sm`}>
-                                              <div className="flex justify-between items-start mb-2">
-                                                <div className="flex gap-2">
-                                                  <span className="text-[10px] font-black text-blue-600 bg-blue-50 dark:bg-blue-900/40 px-2 py-0.5 rounded-md uppercase">{target.hari} • {target.kelas}</span>
-                                                  {isDiffSks && <span className="text-[9px] font-black text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md uppercase ring-1 ring-amber-200">BEDA SKS</span>}
+                                            <button key={target.id} disabled={!swapReason.trim()} onClick={() => executeSwap(target)} className={`p-5 sm:p-6 bg-white dark:bg-slate-900 border-2 ${isDiffSks ? 'border-amber-200 dark:border-amber-900/40' : 'border-emerald-50'} hover:border-emerald-500 rounded-[1.75rem] lg:rounded-[2rem] text-left transition-all disabled:opacity-30 group shadow-sm overflow-hidden flex flex-col h-full`}>
+                                              <div className="flex justify-between items-start mb-2 gap-4 overflow-hidden">
+                                                <div className="flex flex-wrap gap-1 overflow-hidden">
+                                                  <span className="text-[9px] lg:text-[10px] font-black text-blue-600 bg-blue-50 dark:bg-blue-900/40 px-2 py-0.5 rounded-md uppercase truncate shrink min-w-0">{target.hari} • {target.kelas}</span>
+                                                  {isDiffSks && <span className="text-[8px] font-black text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md uppercase ring-1 ring-amber-200 shrink-0">BEDA SKS</span>}
                                                 </div>
-                                                <span className="text-[9px] font-bold text-slate-400 uppercase">{target.sks} SKS</span>
+                                                <span className="text-[9px] font-bold text-slate-400 uppercase whitespace-nowrap shrink-0">{target.sks} SKS</span>
                                               </div>
-                                              <h5 className="font-black text-slate-800 dark:text-white text-sm uppercase leading-tight group-hover:text-emerald-600 line-clamp-1">{target.matkul}</h5>
-                                              <p className="text-[10px] font-bold text-slate-500 mt-0.5 truncate">{target.dosen}</p>
-                                              <div className="mt-4 pt-4 border-t dark:border-slate-800 text-[10px] font-black text-slate-400 uppercase">{target.waktu} [{target.ruangan}]</div>
+                                              <h5 className="font-black text-slate-800 dark:text-white text-xs lg:text-sm uppercase leading-tight group-hover:text-emerald-600 line-clamp-1 break-word-custom">{target.matkul}</h5>
+                                              <p className="text-[9px] lg:text-[10px] font-bold text-slate-500 mt-0.5 truncate">{target.dosen}</p>
+                                              <div className="mt-auto pt-4 border-t dark:border-slate-800 text-[9px] lg:text-[10px] font-black text-slate-400 uppercase truncate">
+                                                {target.waktu} <span className="text-slate-300 mx-1">|</span> [{target.ruangan}]
+                                              </div>
                                             </button>
                                           )
                                         }) : (
-                                          <div className="col-span-full py-10 text-center opacity-40 uppercase font-black text-xs italic tracking-widest">Tidak ada kandidat swap yang aman secara bentrok</div>
+                                          <div className="col-span-full py-10 text-center opacity-40 uppercase font-black text-[10px] italic tracking-widest">Tidak ada kandidat swap yang aman</div>
                                         )}
                                       </div>
                                     ) : (
-                                      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3 max-h-96 overflow-y-auto pr-2 custom-scrollbar">
+                                      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3 max-h-96 overflow-y-auto pr-2 custom-scrollbar p-1">
                                         {moveOptions.map((opt, i) => (
                                         <button 
                                           key={i} 
                                           disabled={!swapReason.trim()} 
                                           onClick={() => executeMove(opt)} 
-                                          className="p-4 bg-white dark:bg-slate-900 border-2 border-slate-100 dark:border-slate-800 rounded-3xl text-center shadow-sm hover:border-emerald-500 disabled:opacity-30 transition-all group relative overflow-hidden"
+                                          className="p-3 sm:p-4 bg-white dark:bg-slate-900 border-2 border-slate-100 dark:border-slate-800 rounded-2xl sm:rounded-3xl text-center shadow-sm hover:border-emerald-500 disabled:opacity-30 transition-all group relative overflow-hidden h-full flex flex-col justify-between"
                                         >
-                                          {/* Keterangan Waktu */}
-                                          <p className="text-[9px] font-black text-slate-400 mb-1 group-hover:text-emerald-500 uppercase">{opt.waktu}</p>
-                                          
-                                          {/* Nama Ruangan */}
-                                          <p className="text-sm font-black text-slate-800 dark:text-white uppercase">{opt.ruangan}</p>
-                                          
-                                          {/* Penambahan SKS dari Matkul yang sedang dipindahkan */}
-                                          <div className="mt-2 pt-2 border-t border-dashed border-slate-100 dark:border-slate-800">
-                                            <span className="text-[8px] font-black text-blue-500 uppercase bg-blue-50 dark:bg-blue-900/30 px-2 py-0.5 rounded-md">
+                                          <p className="text-[8px] lg:text-[9px] font-black text-slate-400 mb-1 group-hover:text-emerald-500 uppercase truncate shrink-0">{opt.waktu}</p>
+                                          <p className="text-xs sm:text-sm font-black text-slate-800 dark:text-white uppercase truncate px-1 shrink min-w-0">{opt.ruangan}</p>
+                                          <div className="mt-2 pt-2 border-t border-dashed border-slate-100 dark:border-slate-800 shrink-0">
+                                            <span className="text-[7px] lg:text-[8px] font-black text-blue-500 uppercase bg-blue-50 dark:bg-blue-900/30 px-2 py-0.5 rounded-md truncate">
                                               {swapMatkulAsal?.sks || 0} SKS
                                             </span>
                                           </div>
@@ -1213,6 +1314,7 @@
                                       </div>
                                     )}
                                   </div>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -1223,69 +1325,92 @@
 
                     {activeMenu === 'history' && (
                       <div className="animate-in space-y-6">
-                        <div className="bg-white dark:bg-slate-900 p-10 rounded-[3.5rem] shadow-sm border dark:border-slate-800">
-                             <div className="flex items-center justify-between mb-10 pb-8 border-b dark:border-slate-800">
-                                <div className="flex items-center gap-5">
-                                  <div className="bg-blue-600 p-4 rounded-3xl text-white shadow-xl shadow-blue-500/30"><FileText size={32} /></div>
-                                  <div>
-                                    <h2 className="text-3xl font-black text-slate-800 dark:text-white uppercase leading-none">Berita Acara & Riwayat</h2>
-                                    <p className="text-slate-500 font-bold text-[10px] uppercase mt-2">Log Audit Sinkronisasi Awan</p>
+                        <div className="bg-white dark:bg-slate-900 p-6 lg:p-10 rounded-[2.5rem] lg:rounded-[3.5rem] shadow-sm border dark:border-slate-800 overflow-hidden">
+                             <div className="flex flex-col lg:flex-row lg:items-center justify-between mb-10 pb-8 border-b dark:border-slate-800 gap-6">
+                                <div className="flex items-center gap-4 sm:gap-5 overflow-hidden">
+                                  <div className="bg-blue-600 p-3 sm:p-4 rounded-2xl sm:rounded-3xl text-white shadow-xl shadow-blue-500/30 shrink-0"><FileText size={28} /></div>
+                                  <div className="min-w-0">
+                                    <h2 className="text-xl sm:text-2xl lg:text-3xl font-black text-slate-800 dark:text-white uppercase leading-none truncate break-word-custom">Berita Acara</h2>
+                                    <p className="text-slate-500 font-bold text-[9px] lg:text-[10px] uppercase mt-2 truncate">Log Audit Sinkronisasi Awan</p>
                                   </div>
                                 </div>
-                                {selectedHistoryIds.length > 0 && authorizedProdi && (
-                                    <div className="flex items-center gap-2 animate-in">
-                                      <button onClick={() => setSelectedHistoryIds([])} className="flex items-center gap-2 px-5 py-3 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl font-black text-[10px] uppercase hover:bg-slate-200 transition-all"><XCircle size={16} /> Batal Pilih</button>
-                                      <button onClick={executeMultiUndo} className="flex items-center gap-3 px-6 py-3 bg-red-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-xl hover:opacity-90 transition-all"><RotateCcw size={16} /> Batalkan {selectedHistoryIds.length} Perubahan</button>
-                                    </div>
-                                )}
                              </div>
                              <div className="space-y-6">
-                               {historyLog.map((log) => (
-                                 <div key={log.id} className={`relative bg-slate-50 dark:bg-slate-800/20 border-2 p-8 rounded-[3rem] transition-all group ${(authorizedProdi === 'SUPER_ADMIN' || authorizedProdi === log.prodi) && selectedHistoryIds.includes(log.id) ? 'border-blue-600 ring-4 ring-blue-600/10' : 'border-transparent hover:border-blue-400'}`}>
-                                   <div className="flex flex-col gap-6">
-                                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                                       <div className="flex items-center gap-4">
+                              <div className="flex flex-wrap gap-2 mb-6">
+                                <button 
+                                  onClick={handleSelectAllHistory}
+                                  className="flex items-center justify-center gap-2 px-4 py-3 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-2xl font-black text-[9px] lg:text-[10px] uppercase border border-blue-100 dark:border-blue-800 hover:bg-blue-600 hover:text-white transition-all shrink-0"
+                                >
+                                  {selectedHistoryIds.length === historyLog.filter(l => authorizedProdi === 'SUPER_ADMIN' || l.prodi === authorizedProdi).length && selectedHistoryIds.length > 0
+                                    ? "Lepas Semua" 
+                                    : "Pilih Semua"}
+                                </button>
+                                
+                                  {/* Tombol Batal Pilih & Undo di bawah ini tetap menggunakan kodingan lama Anda agar tidak double */}
+                                  {selectedHistoryIds.length > 0 && (
+                                    <>
+                                      <button 
+                                        onClick={() => setSelectedHistoryIds([])} 
+                                        className="flex items-center justify-center gap-2 px-4 py-3 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl font-black text-[9px] lg:text-[10px] uppercase transition-all shrink-0"
+                                      >
+                                        <XCircle size={14} /> Batal Pilih
+                                      </button>
+                                      
+                                      <button 
+                                        onClick={executeMultiUndo} 
+                                        className="flex items-center justify-center gap-2 px-5 py-3 bg-red-600 text-white rounded-2xl font-black text-[9px] lg:text-[10px] uppercase shadow-xl transition-all shrink-0"
+                                      >
+                                        <RotateCcw size={14} /> Undo {selectedHistoryIds.length} Data
+                                      </button>
+                                    </>
+                                  )}
+                              </div>
+                               {historyLog.length > 0 ? historyLog.map((log) => (
+                                 <div key={log.id} className={`relative bg-slate-50 dark:bg-slate-800/20 border-2 p-6 lg:p-8 rounded-[2.5rem] lg:rounded-[3rem] transition-all group overflow-hidden ${(authorizedProdi === 'SUPER_ADMIN' || authorizedProdi === log.prodi) && selectedHistoryIds.includes(log.id) ? 'border-blue-600 ring-4 ring-blue-600/10' : 'border-transparent hover:border-blue-400'}`}>
+                                   <div className="flex flex-col gap-6 overflow-hidden">
+                                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 overflow-hidden">
+                                       <div className="flex flex-wrap items-center gap-3 min-w-0">
                                          {(authorizedProdi === 'SUPER_ADMIN' || authorizedProdi === log.prodi) && (
-                                           <button onClick={() => toggleHistorySelection(log.id)} className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all ${selectedHistoryIds.includes(log.id) ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 text-slate-300'}`}>
-                                              {selectedHistoryIds.includes(log.id) ? <CheckSquare size={18} /> : <Square size={18} />}
+                                           <button onClick={() => toggleHistorySelection(log.id)} className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all shrink-0 ${selectedHistoryIds.includes(log.id) ? 'bg-blue-600 text-white shadow-md' : 'bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 text-slate-300'}`}>
+                                              {selectedHistoryIds.includes(log.id) ? <CheckSquare size={16} /> : <Square size={16} />}
                                            </button>
                                          )}
-                                         <span className={`px-4 py-1.5 rounded-xl text-[10px] font-black uppercase shadow-sm ${log.type === 'SWAP' ? 'bg-orange-600 text-white' : 'bg-emerald-600 text-white'}`}>{log.type}</span>
-                                         <span className="px-4 py-1.5 bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 rounded-xl text-[10px] font-black uppercase tracking-tight">{log.prodi}</span>
+                                         <span className={`px-3 py-1.5 rounded-xl text-[9px] font-black uppercase shadow-sm shrink-0 ${log.type === 'SWAP' ? 'bg-orange-600 text-white' : 'bg-emerald-600 text-white'}`}>{log.type}</span>
+                                         <span className="px-3 py-1.5 bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 rounded-xl text-[9px] font-black uppercase tracking-tight truncate min-w-0">{log.prodi}</span>
                                        </div>
-                                       <div className="text-right"><p className="text-[9px] font-black text-slate-400 uppercase">{log.timestamp}</p><p className="text-xs font-black text-slate-800 dark:text-white uppercase">Oleh: {log.admin}</p></div>
+                                       <div className="md:text-right shrink-0"><p className="text-[8px] font-black text-slate-400 uppercase">{log.timestamp}</p><p className="text-[11px] lg:text-xs font-black text-slate-800 dark:text-white uppercase truncate">Oleh: {log.admin}</p></div>
                                      </div>
-                                     <div className="bg-white dark:bg-slate-900 p-6 rounded-[2rem] border dark:border-slate-800 shadow-inner">
-                                       <p className="text-[10px] font-black text-blue-600 uppercase mb-1">Berita Acara:</p>
-                                       <p className="text-sm font-bold text-slate-700 dark:text-slate-300 italic leading-relaxed">"{log.reason}"</p>
+                                     <div className="bg-white dark:bg-slate-900 p-5 rounded-[1.75rem] border dark:border-slate-800 shadow-inner overflow-hidden">
+                                       <p className="text-[9px] font-black text-blue-600 uppercase mb-1 truncate">Berita Acara / Alasan:</p>
+                                       <p className="text-xs lg:text-sm font-bold text-slate-700 dark:text-slate-300 italic leading-relaxed break-word-custom">"{log.reason}"</p>
                                      </div>
-                                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                       {log.affected.map((aff, i) => (
-                                        <div key={i} className="bg-white dark:bg-slate-900 p-5 rounded-[2rem] border dark:border-slate-800 shadow-sm">
-                                          <h4 className="text-xs font-black uppercase text-blue-600 mb-4">{aff.matkul}</h4>
-                                          <div className="grid grid-cols-2 gap-4">
-                                            {/* Kolom Kiri: Data Asal */}
-                                            <div className="space-y-1 opacity-50">
-                                              <p className="text-[8px] font-black uppercase text-slate-400">Kondisi Asal</p>
-                                              <p className="text-[10px] font-black leading-tight">{aff.before.dosen}</p>
-                                              <p className="text-[10px] font-bold">{aff.before.hari}, {aff.before.waktu}</p>
-                                              <p className="text-[9px] font-black uppercase">R: {aff.before.ruangan} • Kls: {aff.before.kelas}</p>
+                                        <div key={i} className="bg-white dark:bg-slate-900 p-4 lg:p-5 rounded-[1.75rem] lg:rounded-[2rem] border dark:border-slate-800 shadow-sm overflow-hidden h-full flex flex-col">
+                                          <h4 className="text-[10px] lg:text-xs font-black uppercase text-blue-600 mb-4 truncate break-word-custom">{aff.matkul}</h4>
+                                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 flex-1">
+                                            <div className="space-y-1 opacity-50 overflow-hidden">
+                                              <p className="text-[7px] lg:text-[8px] font-black uppercase text-slate-400 truncate">Kondisi Asal</p>
+                                              <p className="text-[9px] lg:text-[10px] font-black leading-tight line-clamp-1 truncate">{aff.before.dosen}</p>
+                                              <p className="text-[9px] lg:text-[10px] font-bold whitespace-nowrap truncate">{aff.before.hari}, {aff.before.waktu}</p>
+                                              <p className="text-[8px] lg:text-[9px] font-black uppercase truncate">R: {aff.before.ruangan} • Kls: {aff.after.kelas}</p>
                                             </div>
-                                            {/* Kolom Kanan: Data Baru */}
-                                            <div className="space-y-1">
-                                              <p className="text-[8px] font-black uppercase text-emerald-500">Kondisi Baru</p>
-                                              <p className="text-[10px] font-black leading-tight">{aff.after.dosen}</p>
-                                              <p className="text-[10px] font-black text-emerald-600">{aff.after.hari}, {aff.after.waktu}</p>
-                                              <p className="text-[9px] font-black uppercase text-emerald-500/70">R: {aff.after.ruangan} • Kls: {aff.after.kelas}</p>
+                                            <div className="space-y-1 overflow-hidden border-t sm:border-t-0 sm:border-l sm:pl-4 dark:border-slate-800 pt-3 sm:pt-0">
+                                              <p className="text-[7px] lg:text-[8px] font-black uppercase text-emerald-500 truncate">Kondisi Baru</p>
+                                              <p className="text-[9px] lg:text-[10px] font-black leading-tight line-clamp-1 truncate">{aff.after.dosen}</p>
+                                              <p className="text-[9px] lg:text-[10px] font-black text-emerald-600 whitespace-nowrap truncate">{aff.after.hari}, {aff.after.waktu}</p>
+                                              <p className="text-[8px] lg:text-[9px] font-black uppercase text-emerald-500/70 truncate">R: {aff.after.ruangan} • Kls: {aff.after.kelas}</p>
                                             </div>
                                           </div>
                                         </div>
                                       ))}
                                     </div>
-                                     {(authorizedProdi === 'SUPER_ADMIN' || authorizedProdi === log.prodi) && !selectedHistoryIds.includes(log.id) && (<button onClick={() => undoAction(log.id)} className="w-fit flex items-center gap-2 px-6 py-2.5 bg-red-50 hover:bg-red-600 text-red-600 hover:text-white rounded-xl text-[10px] font-black uppercase transition-all shadow-sm">Kembalikan Perubahan Cloud</button>)}
+                                     {(authorizedProdi === 'SUPER_ADMIN' || authorizedProdi === log.prodi) && !selectedHistoryIds.includes(log.id) && (
+                                        <button onClick={() => undoAction(log.id)} className="w-full sm:w-fit flex items-center justify-center gap-2 px-6 py-2.5 bg-red-50 hover:bg-red-600 text-red-600 hover:text-white rounded-xl text-[9px] font-black uppercase transition-all shadow-sm shrink-0">Batalkan Perubahan Ini</button>
+                                     )}
                                    </div>
                                  </div>
-                               ))}
+                               )) : <p className="text-[10px] font-black text-slate-400 text-center py-10 uppercase italic">Belum ada riwayat perubahan</p>}
                              </div>
                         </div>
                       </div>
