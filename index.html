@@ -365,26 +365,63 @@
 
       // --- EXPORT TO EXCEL ---
       const downloadExcel = () => {
-        if (filteredSchedules.length === 0) return setToast("Tidak ada data untuk diunduh");
+        if (filteredSchedules.length === 0) {
+          return setToast("⚠️ Tidak ada data untuk diunduh pada prodi ini");
+        }
         
+        // Fungsi pembantu untuk mengambil nilai dari berbagai kemungkinan nama kunci (key)
+        const getValue = (obj, keys) => {
+          for (const key of keys) {
+            if (obj[key] !== undefined && obj[key] !== null && obj[key] !== "") {
+              return obj[key];
+            }
+          }
+          return "-";
+        };
+
+        // Mapping data agar urutan kolom sesuai dengan format asli + Update Terakhir
         const dataForExcel = filteredSchedules.map(s => ({
-          "Mata Kuliah": s.matkul,
-          "Dosen": s.dosen,
-          "Hari": s.hari,
-          "Waktu": s.waktu,
-          "Ruangan": s.ruangan,
-          "Prodi": s.prodi,
-          "Kelas": s.kelas,
-          "SKS": s.sks,
-          "Semester": s.semester,
-          "Update Terakhir": s.keterangan_rapat || "-"
+          "Kode Matkul": getValue(s, ["kode_matkul", "Kode Matkul", "KODE MATKUL", "kodematkul"]),
+          "Nama Matkul": getValue(s, ["matkul", "Nama Matkul", "nama_matkul", "Nama matkul"]),
+          "SKS": getValue(s, ["sks", "SKS"]),
+          "Semester": getValue(s, ["semester", "Semester", "SMT"]),
+          "Dosen Pengampu": getValue(s, ["dosen", "Dosen Pengampu", "dosen_pengampu", "Dosen"]),
+          "Hari": getValue(s, ["hari", "Hari"]),
+          "Waktu": getValue(s, ["waktu", "Waktu", "Jam"]),
+          "Kelas": getValue(s, ["kelas", "Kelas", "Kls"]),
+          "Ruangan": getValue(s, ["ruangan", "Ruangan", "Ruang", "R."]),
+          "Program Studi": getValue(s, ["prodi", "Program Studi", "program_studi"]),
+          "Fakultas": getValue(s, ["fakultas", "Fakultas", "FAKULTAS"]),
+          "Keterangan": getValue(s, ["keterangan", "Keterangan"]) === "-" ? "Reguler" : getValue(s, ["keterangan", "Keterangan"]),
+          // Kolom tambahan untuk melacak riwayat perubahan (swap/move)
+          "Update Terakhir": s.keterangan_rapat && s.keterangan_rapat !== "-" 
+            ? s.keterangan_rapat 
+            : "Belum ada perubahan"
         }));
 
+        // Proses konversi ke file Excel menggunakan library XLSX
         const ws = XLSX.utils.json_to_sheet(dataForExcel);
         const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Jadwal_UMB");
-        XLSX.writeFile(wb, `Jadwal_${selectedProdi.replace(/\s/g, '_')}.xlsx`);
-        setToast("✅ Excel Berhasil Diunduh");
+        XLSX.utils.book_append_sheet(wb, ws, "Jadwal_Perkuliahan");
+        
+        // Atur lebar kolom otomatis agar rapi
+        const wscols = [
+          {wch: 15}, {wch: 40}, {wch: 5}, {wch: 10}, {wch: 30}, 
+          {wch: 12}, {wch: 18}, {wch: 12}, {wch: 12}, {wch: 25}, 
+          {wch: 20}, {wch: 15}, {wch: 65}
+        ];
+        ws['!cols'] = wscols;
+
+        // Penamaan file otomatis: Jadwal_[NamaProdi]_Genap_25_26.xlsx
+        const fileName = `Jadwal_${selectedProdi.replace(/\s/g, '_')}_Genap_25_26.xlsx`;
+        
+        try {
+          XLSX.writeFile(wb, fileName);
+          setToast("✅ Excel Berhasil Diunduh (Format Lengkap)");
+        } catch (err) {
+          setToast("❌ Gagal mengunduh file Excel");
+          console.error("Excel Error:", err);
+        }
       };
 
       const handleLogin = () => {
