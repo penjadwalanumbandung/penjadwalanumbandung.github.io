@@ -96,31 +96,6 @@
     const auth = getAuth(app);
     const db = getFirestore(app);
 
-    // --- CONSTANTS ---
-    const PASSCODE_MAP = {
-      "UMB-2025-ROOT": "SUPER_ADMIN", 
-      "AP2533": "Administrasi Publik",
-      "AG2512": "Agribisnis",
-      "AK2522": "Akuntansi",
-      "BT2502": "Bioteknologi",
-      "ES2523": "Ekonomi Syariah",
-      "FA2506": "Farmasi",
-      "HK2508": "Hukum Keluarga Islam",
-      "IK2507": "Ilmu Komunikasi",
-      "KP2524": "Komunikasi dan Penyiaran Islam",
-      "KR2505": "Kriya Tekstil dan Fashion",
-      "MM2509": "Magister Manajemen",
-      "MN2588": "Manajemen",
-      "PA2501": "Pendidikan Agama Islam",
-      "PI2525": "Pendidikan Islam Anak Usia Dini",
-      "PR2526": "Profesi Apoteker",
-      "PS2510": "Psikologi",
-      "EL2511": "Teknik Elektro",
-      "TI2517": "Teknik Industri",
-      "IF2599": "Teknik Informatika",
-      "TP2503": "Teknologi Pangan"
-    };
-
     const DAYS_ORDER = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
     const TIMES_SLOTS = [
       "07:00-08:40", "07:00-09:30", "08:50-10:30", "09:40-12:10", 
@@ -229,6 +204,11 @@
         keterangan: 'Reguler'
       });
 
+      const [cloudPasscodeMap, setCloudPasscodeMap] = useState(null);
+      const [showPasswordModal, setShowPasswordModal] = useState(false);
+      const [newPasscodeData, setNewPasscodeData] = useState({ old: '', new: '' });
+      const [isConfigLoading, setIsConfigLoading] = useState(true);
+
       // --- INITIAL AUTH ---
       useEffect(() => {
         const initAuth = async () => {
@@ -262,47 +242,58 @@
         };
       }, []);
 
-      // --- FIRESTORE REAL-TIME SYNC ---
+      // --- FIRESTORE REAL-TIME SYNC (FIXED) ---
       useEffect(() => {
-        if (!user) return;
+        if (!user) return; // Tunggu sampai login anonim Firebase selesai
 
-        console.log("Fetching data for appId:", appId);
         setIsLoadingData(true);
-        setSyncStatus('Sinkronisasi...');
-
-        const schedulesCol = collection(db, 'artifacts', appId, 'public', 'data', 'schedules');
         
+        // 1. Path Konfigurasi Passcode
+        const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'passcodes');
+        
+        // 2. Path Koleksi Jadwal
+        const schedulesCol = collection(db, 'artifacts', appId, 'public', 'data', 'schedules');
+
+        // Listener Config (Passcode)
+        const unsubConfig = onSnapshot(configRef, (docSnap) => {
+          if (docSnap.exists()) {
+            setCloudPasscodeMap(docSnap.data().map);
+          } else {
+            setCloudPasscodeMap({}); // Map kosong jika belum ada data di cloud
+          }
+          setIsConfigLoading(false);
+        }, (err) => {
+          console.error("Config Error:", err);
+          setIsConfigLoading(false);
+        });
+
+        // Listener Jadwal (Schedules)
         const unsubSchedules = onSnapshot(schedulesCol, (snapshot) => {
           const data = snapshot.docs.map(doc => doc.data());
           setSchedules(data);
           
-          // UPDATE DISINI: Menghitung total data di cloud
-          setTotalCloudData(snapshot.size); 
-          setSyncStatus('Sinkron');
-
-          const uniqueProdis = [...new Set(data.map(s => s.prodi))].sort();
-          if (uniqueProdis.length > 0) {
-            if (!selectedProdi || !uniqueProdis.includes(selectedProdi)) {
-              setSelectedProdi(uniqueProdis[0]);
-            }
+          // Matikan loading screen segera setelah data jadwal diterima
+          setIsLoadingData(false); 
+          
+          if (typeof setTotalCloudData === 'function') {
+            setTotalCloudData(snapshot.size);
           }
-          setIsLoadingData(false);
+          if (typeof setSyncStatus === 'function') {
+            setSyncStatus('Sinkron');
+          }
         }, (err) => {
-          console.error("Firestore Error:", err);
-          setSyncStatus('Error');
-          setIsLoadingData(false);
+          console.error("Schedules Error:", err);
+          setIsLoadingData(false); // Tetap matikan loading meski error agar bisa "Bypass"
+          if (typeof setSyncStatus === 'function') {
+            setSyncStatus('Error');
+          }
         });
 
-        const historyCol = collection(db, 'artifacts', appId, 'public', 'data', 'history');
-        const unsubHistory = onSnapshot(historyCol, (snapshot) => {
-          const data = snapshot.docs.map(doc => doc.data()).sort((a, b) => b.id - a.id);
-          setHistoryLog(data);
-        }, (err) => {
-           console.error("History Error:", err);
-        });
-
-        return () => { unsubSchedules(); unsubHistory(); };
-      }, [user, appId]);
+        return () => {
+          unsubConfig();
+          unsubSchedules();
+        };
+      }, [user, appId]); // Pastikan dependensi lengkap
 
       // Login Persistence
       useEffect(() => {
@@ -432,14 +423,44 @@
       };
 
       const handleLogin = () => {
-        const prodiMatch = PASSCODE_MAP[loginModal.passcode];
+        const targetMap = cloudPasscodeMap || {}; 
+        const prodiMatch = targetMap[loginModal.passcode];
+        
         if (prodiMatch) {
           setAuthorizedProdi(prodiMatch);
           if (prodiMatch !== 'SUPER_ADMIN') setSelectedProdi(prodiMatch); 
           setLoginModal({ open: false, passcode: '', error: '' });
-          setToast(`Login Berhasil: ${prodiMatch === 'SUPER_ADMIN' ? 'Admin Utama' : 'Kaprodi ' + prodiMatch}`);
+          setToast(`Login Berhasil!`);
         } else {
-          setLoginModal({...loginModal, error: "Passcode salah!"});
+          setToast("❌ Passcode tidak terdaftar!");
+        }
+      };
+
+      
+      const handleChangePasscode = async () => {
+        if (!authorizedProdi || !cloudPasscodeMap) return;
+        if (newPasscodeData.new.length < 4) return setToast("⚠️ Min. 4 Karakter!");
+
+        const updatedMap = { ...cloudPasscodeMap };
+        const oldKey = Object.keys(updatedMap).find(k => updatedMap[k] === authorizedProdi);
+
+        if (authorizedProdi !== 'SUPER_ADMIN' && newPasscodeData.old !== oldKey) {
+          return setToast("❌ Passcode lama salah!");
+        }
+
+        delete updatedMap[oldKey];
+        updatedMap[newPasscodeData.new] = authorizedProdi;
+
+        try {
+          await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'config', 'passcodes'), {
+            map: updatedMap,
+            updatedAt: new Date().toISOString()
+          });
+          setToast("✅ Berhasil Diperbarui!");
+          setShowPasswordModal(false);
+          setNewPasscodeData({ old: '', new: '' });
+        } catch (e) {
+          setToast("❌ Gagal Simpan ke Cloud.");
         }
       };
 
