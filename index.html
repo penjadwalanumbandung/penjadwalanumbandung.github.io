@@ -167,20 +167,19 @@
       const [activeMenu, setActiveMenu] = useState('dashboard');
       const [isSidebarOpen, setSidebarOpen] = useState(window.innerWidth > 1024);
       const [schedules, setSchedules] = useState([]);
-      const [historyLog, setHistoryLog] = useState([]);
+      const [historyLog, setHistoryLog] = useState([]); 
       const [isLoadingData, setIsLoadingData] = useState(true);
-      // State untuk panel sidebar
       const [isPasscodeExpanded, setIsPasscodeExpanded] = useState(false);
-
-      // State untuk modal edit passcode Admin
+      const [showEditModal, setShowEditModal] = useState(false);
+      const [editingId, setEditingId] = useState(null);
       const [showAdminEditModal, setShowAdminEditModal] = useState(false);
       const [adminEditData, setAdminEditData] = useState({ prodi: '', oldCode: '', newCode: '' });
-      const [selectedProdi, setSelectedProdi] = useState(() => localStorage.getItem(PRODI_KEY) || '');
+      const [selectedProdi, setSelectedProdi] = useState(() => localStorage.getItem(PRODI_KEY) || 'Semua Program Studi');
       const [searchTerm, setSearchTerm] = useState('');
       const [occupiedSearch, setOccupiedSearch] = useState('');
       const [adminName, setAdminName] = useState(localStorage.getItem('umb_admin_name') || 'Kaprodi');
       const [scanConfig, setScanConfig] = useState({ hari: 'Senin', waktu: '07:00-09:30' });
-      const [sortConfig, setSortConfig] = useState({ key: 'hari', direction: 'asc' });
+      const [sortConfig, setSortConfig] = useState({ key: 'createdAt', direction: 'desc' });
       const [toast, setToast] = useState(null);
       const [cloudPasscodeMap, setCloudPasscodeMap] = useState(null);
       const [showPasswordModal, setShowPasswordModal] = useState(false);
@@ -188,7 +187,7 @@
       const [isConfigLoading, setIsConfigLoading] = useState(true);
       const [dragActive, setDragActive] = useState(false);
       const [selectedHistoryIds, setSelectedHistoryIds] = useState([]);
-      
+      const [selectedLogs, setSelectedLogs] = useState([]);
       const [swapMode, setSwapMode] = useState('menu'); 
       const [swapStep, setSwapStep] = useState(1);
       const [swapDosenAsal, setSwapDosenAsal] = useState(null);
@@ -196,19 +195,15 @@
       const [swapTargetDay, setSwapTargetDay] = useState('Senin');
       const [swapReason, setSwapReason] = useState('');
       const [swapDayFilter, setSwapDayFilter] = useState('Semua'); 
-      
       const [confirmDialog, setConfirmDialog] = useState({ open: false, title: '', message: '', onConfirm: null });
       const [loginModal, setLoginModal] = useState({ open: false, passcode: '', error: '' });
-
-      // State untuk menghitung total jadwal yang tersimpan di Cloud
       const [totalCloudData, setTotalCloudData] = useState(0);
-
-      // State untuk memantau apakah database sedang sinkron atau tidak
       const [syncStatus, setSyncStatus] = useState('Terhubung'); 
-
       const fileInputRef = useRef(null);
+      const [editingItem, setEditingItem] = useState(null);
       const [showAddModal, setShowAddModal] = useState(false);
-      const [formData, setFormData] = useState({
+      const [moveRequests, setMoveRequests] = useState([]);
+      const initialForm = {
         kode_matkul: '',
         matkul: '',
         sks: '2',
@@ -221,9 +216,65 @@
         prodi: '', 
         fakultas: '',
         keterangan: 'Reguler'
-      });
-
+      };
+      const [formData, setFormData] = useState(initialForm);
       
+      // FUNGSI SETUJUI PENGAJUAN (Hanya Admin)
+      const handleApproveMove = async (req) => {
+        const batch = writeBatch(db);
+        const schedulesRef = doc(db, 'artifacts', appId, 'public', 'data', 'schedules', req.sourceId);
+        const historyRef = doc(db, 'artifacts', appId, 'public', 'data', 'history', `log-${Date.now()}`);
+        const requestRef = doc(db, 'artifacts', appId, 'public', 'data', 'requests', req.docId);
+
+        const timestamp = new Date().toLocaleString('id-ID');
+
+        // 1. Update Jadwal Utama
+        const updatedData = {
+          ...req.dataAsal,
+          hari: req.targetSlot.hari,
+          waktu: req.targetSlot.waktu,
+          ruangan: req.targetSlot.ruangan,
+          keterangan_rapat: `[APPROVED] Pindah ke ${req.targetSlot.ruangan} oleh Admin`
+        };
+
+        // 2. Data Riwayat (BAP)
+        const logData = {
+          id: Date.now(),
+          type: 'MOVE',
+          prodi: req.prodi,
+          admin: authorizedProdi, // Nama Admin yang menyetujui
+          timestamp: timestamp,
+          reason: `[SETUJU] ${req.reason}`,
+          affected: [{
+            matkul: req.dataAsal.matkul,
+            before: { hari: req.dataAsal.hari, waktu: req.dataAsal.waktu, ruangan: req.dataAsal.ruangan },
+            after: { hari: req.targetSlot.hari, waktu: req.targetSlot.waktu, ruangan: req.targetSlot.ruangan }
+          }]
+        };
+
+        try {
+          batch.set(schedulesRef, updatedData); // Update jadwal
+          batch.set(historyRef, logData);      // Catat riwayat
+          batch.delete(requestRef);            // Hapus dari daftar antrean
+          
+          await batch.commit();
+          setToast("✅ Pengajuan Berhasil Disetujui & Jadwal Terupdate!");
+        } catch (err) {
+          console.error(err);
+          setToast("❌ Gagal memproses persetujuan.");
+        }
+      };
+
+      // FUNGSI TOLAK PENGAJUAN
+      const handleRejectMove = async (reqId) => {
+        try {
+          await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'requests', reqId));
+          setToast("🗑️ Pengajuan telah ditolak dan dihapus.");
+        } catch (err) {
+          setToast("❌ Gagal menghapus pengajuan.");
+        }
+      };
+      ;
 
       // --- INITIAL AUTH ---
       useEffect(() => {
@@ -258,21 +309,23 @@
         };
       }, []);
 
-      // --- FIRESTORE REAL-TIME SYNC (FIXED & COMPLETE) ---
+      // --- FIRESTORE REAL-TIME SYNC (OPTIMIZED & COMPLETE) ---
       useEffect(() => {
-        if (!user) return; // Tunggu sampai login anonim Firebase selesai
+        if (!user) return; 
+
+        // 1. AUTO-BYPASS: Jika dalam 5 detik data belum muncul/nyangkut, paksa tutup loading screen
+        const loadingTimeout = setTimeout(() => {
+          setIsLoadingData(false);
+        }, 5000);
 
         setIsLoadingData(true);
         if (typeof setSyncStatus === 'function') setSyncStatus('Sinkronisasi...');
-        
-        // 1. Path Konfigurasi Passcode
-        const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'passcodes');
-        
-        // 2. Path Koleksi Jadwal
-        const schedulesCol = collection(db, 'artifacts', appId, 'public', 'data', 'schedules');
 
-        // 3. Path Koleksi Riwayat & BAP
+        // Path Konfigurasi
+        const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'passcodes');
+        const schedulesCol = collection(db, 'artifacts', appId, 'public', 'data', 'schedules');
         const historyCol = collection(db, 'artifacts', appId, 'public', 'data', 'history');
+        const requestsCol = collection(db, 'artifacts', appId, 'public', 'data', 'requests');
 
         // --- Listener Config (Passcode) ---
         const unsubConfig = onSnapshot(configRef, (docSnap) => {
@@ -289,36 +342,69 @@
 
         // --- Listener Jadwal (Schedules) ---
         const unsubSchedules = onSnapshot(schedulesCol, (snapshot) => {
-          const data = snapshot.docs.map(doc => doc.data());
+          const data = snapshot.docs.map(doc => ({
+            ...doc.data(),
+            id: doc.id // <--- Tetap pertahankan ID agar data bisa dimanipulasi
+          }));
+          
           setSchedules(data);
-          
+          if (typeof setTotalCloudData === 'function') setTotalCloudData(snapshot.size); 
+          setSyncStatus('Sinkron');
+
+          // OPTIMASI: Langsung matikan loading setelah snapshot pertama diterima
           setIsLoadingData(false); 
-          if (typeof setTotalCloudData === 'function') setTotalCloudData(snapshot.size);
-          if (typeof setSyncStatus === 'function') setSyncStatus('Sinkron');
+          clearTimeout(loadingTimeout); // Batalkan timeout jika berhasil
         }, (err) => {
-          console.error("Schedules Error:", err);
-          setIsLoadingData(false);
-          if (typeof setSyncStatus === 'function') setSyncStatus('Error');
+          console.error("Firestore Error:", err);
+          setSyncStatus('Error');
+          setIsLoadingData(false); // Tetap matikan loading agar user tidak stuck
         });
 
-        // --- Listener Riwayat & BAP (TAMBAHKAN INI) ---
+        // --- Listener Riwayat & BAP ---
         const unsubHistory = onSnapshot(historyCol, (snapshot) => {
-          const logs = snapshot.docs.map(doc => ({
-            docId: doc.id,
-            ...doc.data()
-          })).sort((a, b) => (b.id || 0) - (a.id || 0)); // Sortir terbaru di atas
-          
-          setHistoryLog(logs);
-          console.log("Riwayat Sync Berhasil:", logs.length, "item");
+          try {
+            const logs = snapshot.docs.map(doc => {
+              const data = doc.data();
+              return {
+                docId: doc.id,
+                ...data,
+                id: data.id || data.timestamp || Date.now() 
+              };
+            }).sort((a, b) => {
+              const valA = typeof a.id === 'number' ? a.id : 0;
+              const valB = typeof b.id === 'number' ? b.id : 0;
+              return valB - valA;
+            });
+            setHistoryLog(logs);
+          } catch (err) {
+            console.error("Gagal memproses data riwayat:", err);
+          }
         }, (err) => {
-          console.error("History Error:", err);
+          console.error("History Sync Error:", err);
         });
 
-        // --- ATURAN CLEANUP (WAJIB) ---
+        // --- Listener Requests (Persetujuan Pindah) ---
+        const unsubRequests = onSnapshot(requestsCol, (snapshot) => {
+          try {
+            const reqs = snapshot.docs.map(doc => ({ 
+              docId: doc.id, 
+              ...doc.data() 
+            }));
+            if (typeof setMoveRequests === 'function') setMoveRequests(reqs);
+          } catch (err) {
+            console.error("Gagal memproses data pengajuan:", err);
+          }
+        }, (err) => {
+          console.error("Requests Sync Error:", err);
+        });
+
+        // --- ATURAN CLEANUP ---
         return () => {
+          clearTimeout(loadingTimeout);
           unsubConfig();
           unsubSchedules();
-          unsubHistory(); // Pastikan history juga di-unsub
+          unsubHistory(); 
+          unsubRequests();
         };
       }, [user, appId]);
 
@@ -336,13 +422,18 @@
         else document.documentElement.classList.remove('dark');
       }, [isDarkMode]);
 
-      // --- STATS CALCULATOR ---
+      // --- STATS CALCULATOR (FIXED) ---
       const stats = useMemo(() => {
-        const filtered = schedules.filter(s => s.prodi === selectedProdi);
+        // Filter 1: Ambil prodi yang sesuai
+        // Filter 2: PASTIKAN hanya menghitung yang BUKAN ghost slot (!s.isVacated)
+        const baseData = selectedProdi === "Semua Program Studi" 
+          ? schedules.filter(s => s && !s.isVacated) 
+          : schedules.filter(s => s && s.prodi === selectedProdi && !s.isVacated);
+          
         return {
-          totalMatkul: filtered.length,
-          totalDosen: [...new Set(filtered.map(s => s.dosen))].length,
-          totalRuang: [...new Set(filtered.map(s => s.ruangan))].length
+          totalMatkul: baseData.length,
+          totalDosen: [...new Set(baseData.map(s => s.dosen).filter(d => d && d !== "-"))].length,
+          totalRuang: [...new Set(baseData.map(s => s.ruangan).filter(r => r && r !== "-"))].length
         };
       }, [schedules, selectedProdi]);
 
@@ -463,6 +554,23 @@
         }
       };
 
+      const toggleSelectAllLogs = () => {
+        if (selectedLogs.length === historyLog.length && historyLog.length > 0) {
+          // Jika semua sudah terpilih, maka kosongkan
+          setSelectedLogs([]);
+        } else {
+          // Jika belum semua, ambil semua ID dari historyLog
+          const allIds = historyLog.map(log => log.docId);
+          setSelectedLogs(allIds);
+        }
+      };
+
+      const handleSelectLog = (id) => {
+        setSelectedLogs(prev => 
+          prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
+        );
+      };
+
       const handleAdminUpdatePasscode = async () => {
         if (!adminEditData.prodi || adminEditData.newCode.length < 4) {
           return setToast("⚠️ Passcode baru minimal 4 karakter!");
@@ -549,7 +657,7 @@
         }
       };
 
-      // --- IMPROVED EXCEL PROCESSOR (FIXED FOR 1285 DATA) ---
+      // --- IMPROVED EXCEL PROCESSOR (FIXED FOR LARGE DATA & TIMESTAMP) ---
       const processFile = async (file) => {
         if (authorizedProdi !== 'SUPER_ADMIN') {
           setToast("🔐 Hanya Super Admin yang boleh upload!");
@@ -616,6 +724,7 @@
                   kelas: kelasVal,
                   sks: getVal(['SKS', 'sks']) || '0',
                   semester: getVal(['Semester', 'SEMESTER']) || '0',
+                  createdAt: Date.now(), // <--- WAJIB UNTUK SORTING TERBARU
                   keterangan_rapat: '-'
                 };
                 
@@ -624,6 +733,7 @@
                 count++;
                 opCount++;
 
+                // Firestore memiliki limit 500 operasi per batch, kita commit setiap 450
                 if (opCount >= 450) {
                   await currentBatch.commit();
                   currentBatch = writeBatch(db);
@@ -666,20 +776,53 @@
         setSortConfig({ key, direction });
       };
 
+      // --- FILTER DASHBOARD (FIXED & ROBUST) ---
       const filteredSchedules = useMemo(() => {
-        let base = schedules.filter(s => s.prodi === selectedProdi);
+        // 1. Safety Guard: Pastikan schedules adalah array
+        if (!Array.isArray(schedules)) return [];
+
+        // 2. FILTER UTAMA: Prodi + Sembunyikan Ghost Slots (!s.isVacated)
+        let base = selectedProdi === "Semua Program Studi" 
+          ? schedules.filter(s => s && !s.isVacated) 
+          : schedules.filter(s => s && s.prodi === selectedProdi && !s.isVacated);
+
+        // 3. SEARCH DENGAN SAFETY GUARDS (Mencegah Crash jika data null/undefined)
         if (searchTerm) {
           const q = searchTerm.toLowerCase();
           base = base.filter(s => 
-            s.matkul.toLowerCase().includes(q) || s.dosen.toLowerCase().includes(q) ||
-            s.ruangan.toLowerCase().includes(q) || s.hari.toLowerCase().includes(q) ||
-            s.kelas.toLowerCase().includes(q) || s.waktu.toLowerCase().includes(q)
+            (s?.matkul?.toLowerCase() || "").includes(q) || 
+            (s?.dosen?.toLowerCase() || "").includes(q) ||
+            (s?.ruangan?.toLowerCase() || "").includes(q) || 
+            (s?.hari?.toLowerCase() || "").includes(q) ||
+            (s?.kelas?.toLowerCase() || "").includes(q) || 
+            (s?.waktu?.toLowerCase() || "").includes(q)
           );
         }
-        if (sortConfig.key === 'hari') return sortSchedulesByDay(base, sortConfig.direction);
-        return base.sort((a, b) => {
+
+        // 4. SORTING LOGIC
+        if (!sortConfig || !sortConfig.key) return base;
+
+        // Khusus urutan Hari
+        if (sortConfig.key === 'hari') {
+          return (typeof sortSchedulesByDay === 'function') 
+            ? sortSchedulesByDay(base, sortConfig.direction) 
+            : base;
+        }
+
+        // Khusus urutan Terbaru (createdAt) - MENGGUNAKAN TIMESTAMP
+        if (sortConfig.key === 'createdAt') {
+          return [...base].sort((a, b) => {
+            const valA = Number(a.createdAt) || 0;
+            const valB = Number(b.createdAt) || 0;
+            return sortConfig.direction === 'asc' ? valA - valB : valB - valA;
+          });
+        }
+
+        // Urutan standar Teks (Matkul, Dosen, dll)
+        return [...base].sort((a, b) => {
           const valA = String(a[sortConfig.key] || "").toLowerCase();
           const valB = String(b[sortConfig.key] || "").toLowerCase();
+          
           if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
           if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
           return 0;
@@ -815,121 +958,399 @@
         });
       };
 
-      const executeMove = (slot) => {
-        if (!authorizedProdi || !swapReason.trim()) return;
+      const executeMove = async (targetSlot) => {
+        if (!swapMatkulAsal || !swapReason.trim()) return setToast("⚠️ Alasan wajib diisi!");
         
-        const dosenAsal = swapDosenAsal || swapMatkulAsal.dosen || "TBA";
-        const kelasAsal = swapMatkulAsal.kelas || "-";
+        const timestamp = new Date().toLocaleString('id-ID');
+        const historyId = Date.now();
+        const ghostId = `ghost-${swapMatkulAsal.id}-${historyId}`;
+
+        const batch = writeBatch(db);
+        const schedCol = collection(db, 'artifacts', appId, 'public', 'data', 'schedules');
         
-        showConfirm(
-          "Konfirmasi Pindah Jadwal", 
-          `Pindahkan [${swapMatkulAsal.matkul}] ke hari ${slot.hari} pukul ${slot.waktu} di Ruang ${slot.ruangan}?`, 
-          async () => {
-            const ts = new Date().toLocaleString('id-ID');
-            
-            // Update baris ini: Menambahkan label semester ke log keterangan
-            const ketInformatif = `[NOTULIS: ${adminName}] [SMT GENAP 25/26] ALASAN: ${swapReason}. ` +
-              `PINDAH: ${dosenAsal} (Kls: ${kelasAsal}, ${swapMatkulAsal.hari}, ${swapMatkulAsal.waktu}, R:${swapMatkulAsal.ruangan}) ` +
-              `-> KE: (${slot.hari}, ${slot.waktu}, R:${slot.ruangan})`;
+        // LOGIKA: Simpan seluruh objek agar data lengkap (Fix TBA)
+        const logData = {
+          id: historyId,
+          type: 'MOVE',
+          prodi: swapMatkulAsal.prodi,
+          admin: authorizedProdi || 'SUPER_ADMIN',
+          timestamp,
+          reason: swapReason,
+          ghostId: ghostId, // ID ini disimpan untuk dihapus saat Undo
+          affected: [{
+            matkul: swapMatkulAsal.matkul,
+            before: { ...swapMatkulAsal }, // Simpan data lengkap lama
+            after: { 
+              ...swapMatkulAsal, 
+              hari: swapTargetDay, 
+              waktu: targetSlot.waktu, 
+              ruangan: targetSlot.ruangan,
+              keterangan_rapat: `[PINDAH] ke ${targetSlot.ruangan}` 
+            }
+          }]
+        };
 
-            const newHistory = {
-              id: Date.now(),
-              type: 'MOVE',
-              admin: authorizedProdi,
-              timestamp: ts,
-              reason: swapReason,
-              prodi: swapMatkulAsal.prodi,
-              affected: [
-                { 
-                  id: swapMatkulAsal.id, 
-                  matkul: swapMatkulAsal.matkul, 
-                  before: { ...swapMatkulAsal }, 
-                  after: { ...swapMatkulAsal, hari: slot.hari, waktu: slot.waktu, ruangan: slot.ruangan, keterangan_rapat: ketInformatif } 
-                }
-              ]
-            };
+        try {
+          // A. Update dokumen asli ke posisi baru
+          batch.set(doc(schedCol, swapMatkulAsal.id), logData.affected[0].after);
 
-            await saveToCloud('schedules', swapMatkulAsal.id, newHistory.affected[0].after);
-            await saveToCloud('history', newHistory.id, newHistory);
-            
-            setToast("Jadwal Berhasil Dipindahkan!");
-            resetSwapFlow();
-          }
-        );
+          // B. Buat Ghost Slot (Baris Kosong) di posisi lama agar tidak duplikat di dashboard
+          batch.set(doc(schedCol, ghostId), {
+            ...swapMatkulAsal,
+            id: ghostId,
+            matkul: `[KOSONG] BEKAS ${swapMatkulAsal.matkul.toUpperCase()}`,
+            dosen: "-",
+            isVacated: true, // Marker penting untuk filter UI
+            ruangan: swapMatkulAsal.ruangan,
+            hari: swapMatkulAsal.hari,
+            waktu: swapMatkulAsal.waktu
+          });
+
+          // C. Simpan Log Riwayat
+          batch.set(doc(db, 'artifacts', appId, 'public', 'data', 'history', `log-${historyId}`), logData);
+
+          await batch.commit();
+          setToast("✅ Berhasil Dipindahkan!");
+          setSwapMode('menu'); setSwapStep(1); setSwapReason('');
+        } catch (e) { 
+          console.error(e);
+          setToast("❌ Gagal Sinkronisasi Cloud."); 
+        }
       };
 
       const handleAddManual = async () => {
+        // --- PROTEKSI OTORITAS ---
         if (authorizedProdi !== 'SUPER_ADMIN') return;
         
-        // Validasi kolom wajib
+        // --- 1. VALIDASI INPUT ---
+        // Memastikan semua kolom wajib sudah terisi sebelum dikirim
         if (!formData.matkul || !formData.ruangan || !formData.dosen || !formData.prodi || !formData.kode_matkul) {
           return setToast("⚠️ Kode Matkul, Nama Matkul, Dosen, Ruangan, dan Prodi wajib diisi!");
         }
         
+        // --- 2. PERSIAPAN DATA ---
         const manualId = `manual-${Date.now()}`;
         const newItem = { 
           ...formData, 
           id: manualId, 
+          createdAt: Date.now(), // Timestamp untuk urutan data
           keterangan_rapat: `[INPUT MANUAL] ditambahkan pada ${new Date().toLocaleString('id-ID')}` 
         };
 
+        // --- 3. EKSEKUSI CLOUD (FIRESTORE) ---
         try {
+          // Pastikan user terautentikasi sebelum menulis ke Firestore
+          if (!auth.currentUser) {
+            setToast("❌ Anda harus login terlebih dahulu.");
+            return;
+          }
+
+          // Gunakan setDoc untuk menyimpan dengan ID kustom (manualId)
+          // Path: /artifacts/{appId}/public/data/schedules/{manualId}
           await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'schedules', manualId), newItem);
-          setToast("✅ Jadwal berhasil ditambahkan ke Cloud!");
-          setShowAddModal(false);
           
-          // Reset Form ke default
+          // --- 4. FEEDBACK & RESET ---
+          setToast("✅ Jadwal berhasil ditambahkan ke Cloud!");
+          setShowAddModal(false); // Menutup modal input
+          
+          // RESET FORM: Mengembalikan state ke kosong agar form bersih saat dibuka lagi
           setFormData({ 
             kode_matkul: '', matkul: '', sks: '2', semester: '2', dosen: '', 
             hari: 'Senin', waktu: '07:00-08:40', kelas: '', ruangan: '', 
             prodi: '', fakultas: '', keterangan: 'Reguler' 
           });
+
         } catch (err) {
-          console.error(err);
-          setToast("❌ Gagal menyimpan.");
+          console.error("Firestore Error:", err);
+          setToast("❌ Gagal menyimpan ke database.");
         }
+      };
+
+      // 1. Fungsi untuk membuka modal edit dan mengisi form dengan data lama
+      const handleOpenEdit = (item) => {
+        // Pastikan setEditingItem dipanggil di sini
+        setEditingItem(item); 
+        
+        // Logika lainnya seperti mengisi form data
+        setFormData({ ...item });
+        setEditingId(item.id);
+        setShowEditModal(true);
+      };
+
+      const handleUpdateManual = async () => {
+        // 1. Ambil ID dokumen secara akurat
+        const docId = editingItem?.id || editingId;
+        
+        if (!docId) {
+          console.error("ID Dokumen Hilang!");
+          return setToast("❌ Gagal: ID Dokumen tidak ditemukan. Mohon buka ulang modal.");
+        }
+
+        // 2. Bersihkan data dari 'formData' (Bukan dari editingItem)
+        const cleanData = {};
+        
+        Object.keys(formData).forEach(key => {
+          // Kita tidak ingin menyimpan 'id' di dalam isi dokumen (body)
+          if (key !== 'id' && key !== 'docId' && key !== 'createdAt') {
+            const value = formData[key];
+            
+            // Firestore akan ERROR jika menerima 'undefined'
+            // Kita ubah null/undefined menjadi string kosong atau "-"
+            if (value === undefined || value === null) {
+              cleanData[key] = "-"; 
+            } else {
+              cleanData[key] = value;
+            }
+          }
+        });
+
+        try {
+          setSyncStatus('Mengupload...');
+
+          // 3. Referensi ke dokumen Cloud
+          const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'schedules', docId.toString());
+          
+          // 4. Eksekusi simpan dengan mode MERGE (Menggabungkan data lama & baru)
+          await setDoc(docRef, {
+            ...cleanData,
+            lastUpdate: new Date().toISOString(),
+            // Tandai keterangan rapat agar user tahu ini hasil edit manual
+            keterangan_rapat: cleanData.keterangan_rapat || `[EDIT] ${new Date().toLocaleString('id-ID')}`
+          }, { merge: true });
+
+          // 5. Tutup Modal & Reset
+          setToast("✅ Cloud Berhasil Diperbarui!");
+          setShowEditModal(false);
+          setEditingItem(null);
+          setEditingId(null);
+          setSyncStatus('Sinkron');
+          
+        } catch (e) {
+          console.error("Firebase Error:", e);
+          setSyncStatus('Error');
+          setToast("❌ Cloud menolak simpan. Cek koneksi.");
+        }
+      };
+
+
+      // 3. Fungsi untuk menghapus data
+      const handleDeleteData = (id, title) => {
+        if (authorizedProdi !== 'SUPER_ADMIN') return;
+        showConfirm(
+          "Hapus Jadwal?",
+          `Apakah Anda yakin ingin menghapus [${title}] secara permanen dari Cloud?`,
+          async () => {
+            await deleteFromCloud('schedules', id);
+            setToast("🗑️ Jadwal telah dihapus.");
+          }
+        );
       };
 
 
       const executeMultiUndo = async () => {
         if (!authorizedProdi) return;
         if (selectedHistoryIds.length === 0) return;
+
         showConfirm(
           "Multi Undo",
           `Apakah Anda yakin ingin membatalkan ${selectedHistoryIds.length} perubahan terpilih?`,
           async () => {
-             const sortedSelection = [...selectedHistoryIds].sort((a, b) => b - a);
-             for (const id of sortedSelection) {
+            try {
+              const batch = writeBatch(db);
+              const schedCol = collection(db, 'artifacts', appId, 'public', 'data', 'schedules');
+              const histCol = collection(db, 'artifacts', appId, 'public', 'data', 'history');
+
+              for (const id of selectedHistoryIds) {
+                // 1. Cari data di historyLog (state)
                 const item = historyLog.find(h => h.id === id);
+                
                 if (item && (authorizedProdi === 'SUPER_ADMIN' || item.prodi === authorizedProdi)) {
-                   for (const aff of item.affected) {
-                      await saveToCloud('schedules', aff.id, aff.before);
-                   }
-                   await deleteFromCloud('history', id);
+                  
+                  // 2. Kembalikan data asli (Revert affected)
+                  item.affected.forEach(aff => {
+                    // Gunakan docId jika ada, atau aff.id
+                    const docRef = doc(schedCol, aff.before.id || aff.id);
+                    batch.set(docRef, { ...aff.before, keterangan_rapat: "-" });
+                  });
+
+                  // 3. HAPUS GHOST (Ini yang tadi hilang di multi-undo)
+                  if (item.ghostId) {
+                    batch.delete(doc(schedCol, item.ghostId));
+                  }
+
+                  // 4. Hapus log riwayat (Gunakan docId yang benar dari Firestore)
+                  // Jika id di state berbeda dengan docId di firestore, pastikan referensinya tepat
+                  const logDocRef = doc(histCol, item.docId || item.id.toString());
+                  batch.delete(logDocRef);
                 }
-             }
-             setSelectedHistoryIds([]);
-             setToast("Perubahan Berhasil Dibatalkan dari Cloud.");
+              }
+
+              // Eksekusi semua perintah sekaligus
+              await batch.commit();
+
+              setSelectedHistoryIds([]);
+              setToast("✨ Multi Undo Berhasil! Semua ghost dibersihkan.");
+            } catch (e) {
+              console.error("Multi Undo Error:", e);
+              setToast("❌ Gagal melakukan Multi Undo.");
+            }
           }
         );
       };
 
-      const undoAction = async (historyId) => { 
-        if (!authorizedProdi) return;
-        showConfirm(
-          "Batalkan Perubahan (Undo)",
-          "Apakah Anda yakin ingin mengembalikan jadwal ini ke posisi semula di Cloud?",
-          async () => {
-            const item = historyLog.find(h => h.id === historyId); 
-            if (item) {
-               for (const aff of item.affected) {
-                  await saveToCloud('schedules', aff.id, aff.before);
-               }
-               await deleteFromCloud('history', historyId);
-               setToast("Sinkronisasi Undo Berhasil.");
-            }
-          }
+      // FUNGSI HAPUS SELURUH RIWAYAT (HANYA SUPER ADMIN)
+      const handleClearAllHistory = async () => {
+        // 1. Validasi Keamanan
+        if (authorizedProdi !== 'SUPER_ADMIN') {
+          return setToast("⚠️ Akses Ditolak: Hanya Super Admin yang bisa menghapus log audit.");
+        }
+
+        // 2. Konfirmasi Ganda
+        const confirm1 = window.confirm("⚠️ PERINGATAN: Seluruh catatan riwayat akan dihapus PERMANEN dari Cloud. Lanjutkan?");
+        if (!confirm1) return;
+        
+        const confirm2 = window.confirm("KONFIRMASI TERAKHIR: Data yang dihapus tidak dapat dikembalikan. Anda yakin?");
+        if (!confirm2) return;
+
+        try {
+          setSyncStatus('Membersihkan...');
+          const batch = writeBatch(db);
+          
+          // Iterasi semua data yang ada di state historyLog untuk dihapus di Cloud
+          historyLog.forEach((log) => {
+            // Gunakan docId (ID Dokumen Firestore) untuk memastikan data terhapus
+            const logRef = doc(db, 'artifacts', appId, 'public', 'data', 'history', log.docId);
+            batch.delete(logRef);
+          });
+
+          await batch.commit();
+          
+          setToast("✅ Database Riwayat Berhasil Dibersihkan!");
+          setSelectedHistoryIds([]); // Reset pilihan jika ada
+          setSyncStatus('Sinkron');
+        } catch (err) {
+          console.error("Gagal membersihkan riwayat:", err);
+          setToast("❌ Gagal membersihkan database.");
+          setSyncStatus('Error');
+        }
+      };
+      
+      const handleRestoreAndClean = async () => {
+        if (authorizedProdi !== 'SUPER_ADMIN') return;
+
+        // 1. Ambil semua log untuk prodi terpilih, urutkan dari yang PALING LAMA (asc)
+        // Ini penting agar kita bisa menangkap "Kondisi Pertama" sebelum diacak-acak
+        const relatedLogs = [...historyLog]
+          .filter(log => log.prodi === selectedProdi)
+          .sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
+
+        if (relatedLogs.length === 0) {
+          return setToast(`✅ Tidak ada rekaman riwayat untuk ${selectedProdi}.`);
+        }
+
+        const confirm = window.confirm(
+          `🚨 RESTORASI TOTAL (SISTEM TRACKING)\n\n` +
+          `Ditemukan ${relatedLogs.length} urutan perubahan pada prodi ${selectedProdi}.\n\n` +
+          `Sistem akan melacak kondisi awal setiap matkul dari tumpukan log dan mengembalikannya ke "Titik Nol" (Jadwal Asli).\n\n` +
+          `Lanjutkan?`
         );
+
+        if (!confirm) return;
+
+        try {
+          const batch = writeBatch(db);
+          const earliestStateMap = {};
+
+          // 2. Tentukan "Kondisi Terawal" untuk setiap Matakuliah (Anti-Numpuk)
+          relatedLogs.forEach(log => {
+            log.affected?.forEach(aff => {
+              // Jika matkul ini belum ada di map, berarti 'aff.before' ini adalah kondisi aslinya
+              if (aff.id && !earliestStateMap[aff.id]) {
+                earliestStateMap[aff.id] = aff.before;
+              }
+            });
+          });
+
+          // 3. Eksekusi Pengembalian ke Jadwal Utama
+          Object.keys(earliestStateMap).forEach(matkulId => {
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'schedules', matkulId);
+            batch.update(docRef, {
+              ...earliestStateMap[matkulId],
+              keterangan_rapat: "-", // Bersihkan semua label "Update Cloud"
+              lastUpdate: new Date().toISOString()
+            });
+          });
+          
+          // 4. Bersihkan semua log yang sudah direstore agar tidak menumpuk lagi
+          relatedLogs.forEach(log => {
+            if (log.docId) {
+              batch.delete(doc(db, 'artifacts', appId, 'public', 'data', 'history', log.docId));
+            }
+          });
+
+          await batch.commit();
+          setToast(`✨ ${Object.keys(earliestStateMap).length} Matkul berhasil kembali ke jadwal asli!`);
+        } catch (err) {
+          console.error("Restore Error:", err);
+          setToast("❌ Gagal melakukan pelacakan restorasi.");
+        }
+      };
+
+
+      const scanDatabaseAnomalies = () => {
+        if (!Array.isArray(schedules)) return setToast("⚠️ Data belum termuat.");
+
+        const anomalies = schedules.filter(s => {
+          // Kriteria Dokumen Corrupt:
+          // 1. Tidak punya Matkul, atau
+          // 2. Tidak punya Prodi, atau
+          // 3. Data tidak valid (null/undefined)
+          return !s || !s.matkul || !s.prodi || s.matkul.trim() === "" || s.prodi.trim() === "";
+        });
+
+        const ghosts = schedules.filter(s => s.isVacated === true);
+
+        console.log("=== LAPORAN DIAGNOSA DATABASE ===");
+        console.log("Total Data di Memori:", schedules.length);
+        console.log("Data Corrupt Found:", anomalies.length);
+        console.table(anomalies);
+        console.log("ID Data Corrupt:", anomalies.map(a => a.id));
+        console.log("Ghost Slots Found:", ghosts.length);
+        
+        if (anomalies.length > 0) {
+          setToast(`🔍 Ditemukan ${anomalies.length} data corrupt! Cek Console (F12)`);
+        } else if (ghosts.length > 0) {
+          setToast(`👻 Database bersih, tapi ada ${ghosts.length} Ghost Slot (Wajar).`);
+        } else {
+          setToast("✅ Database terlihat konsisten secara struktur.");
+        }
+      };
+
+
+      const undoAction = async (historyId) => {
+        const log = historyLog.find(h => h.id === historyId);
+        if (!log || !window.confirm("Batalkan perubahan dan hapus baris kosong (Ghost)?")) return;
+
+        try {
+          const batch = writeBatch(db);
+          const schedCol = collection(db, 'artifacts', appId, 'public', 'data', 'schedules');
+          
+          // 1. Kembalikan data matkul asli dari field 'before'
+          log.affected.forEach(aff => {
+            batch.set(doc(schedCol, aff.before.id), { ...aff.before, keterangan_rapat: "-" });
+          });
+
+          // 2. Hapus Ghost Slot (Duplikat) secara permanen dari Cloud
+          if (log.ghostId) {
+            batch.delete(doc(schedCol, log.ghostId));
+          }
+
+          // 3. Hapus Log Riwayatnya
+          batch.delete(doc(db, 'artifacts', appId, 'public', 'data', 'history', log.docId));
+
+          await batch.commit();
+          setToast("✨ Undo Berhasil & Database Bersih!");
+        } catch (e) { setToast("❌ Gagal melakukan Undo."); }
       };
 
       const toggleHistorySelection = (id) => {
@@ -1189,7 +1610,10 @@
                     <input type="text" placeholder="Contoh: Reguler / Gabungan" value={formData.keterangan} onChange={e => setFormData({...formData, keterangan: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none" />
                   </div>
 
-                  <button onClick={handleAddManual} className="w-full py-4 bg-emerald-600 text-white rounded-[1.5rem] font-black uppercase shadow-lg shadow-emerald-500/20 mt-4 hover:bg-emerald-700 transition-all">
+                  <button 
+                    onClick={handleAddManual} 
+                    className="w-full py-4 bg-emerald-600 text-white rounded-[1.5rem] font-black uppercase shadow-lg shadow-emerald-500/20 mt-4 hover:bg-emerald-700 transition-all"
+                  >
                     Simpan Jadwal ke Cloud
                   </button>
                 </div>
@@ -1226,18 +1650,19 @@
                        <label className="text-[9px] font-black text-slate-400 uppercase">Program Studi:</label>
                        {isLoadingData && <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>}
                     </div>
-                    <select 
-                        disabled={(authorizedProdi && authorizedProdi !== 'SUPER_ADMIN') || isLoadingData} 
-                        value={selectedProdi} 
-                        onChange={(e) => setSelectedProdi(e.target.value)} 
-                        className="w-full bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 p-3 rounded-2xl text-xs font-bold outline-none cursor-pointer dark:text-slate-200 disabled:opacity-50 appearance-none"
-                    >
-                      {cloudProdiList.length > 0 ? (
-                        cloudProdiList.map(p => <option key={p} value={p}>{p}</option>)
-                      ) : (
-                        <option disabled>Menunggu data Cloud...</option>
+                    <select 
+                      disabled={(authorizedProdi !== null && authorizedProdi !== 'SUPER_ADMIN') || isLoadingData} 
+                      value={selectedProdi} 
+                      onChange={(e) => setSelectedProdi(e.target.value)} 
+                      className="w-full bg-slate-50 dark:bg-slate-800 border dark:border-slate-700 p-3 rounded-2xl text-xs font-black outline-none cursor-pointer dark:text-slate-200 appearance-none transition-all">
+                      {/* TAMPILKAN OPSI "SEMUA" HANYA UNTUK GUEST & SUPER ADMIN */}
+                      {(authorizedProdi === null || authorizedProdi === 'SUPER_ADMIN') && (
+                        <option value="Semua Program Studi">SEMUA PROGRAM STUDI</option>
                       )}
-                    </select>
+                      {cloudProdiList.map(p => (
+                        <option key={p} value={p}>{p}</option>
+                      ))}
+                  </select>
                   </div>
                 </div>
               )}
@@ -1258,6 +1683,37 @@
                     {(isSidebarOpen || window.innerWidth <= 1024) && <span className="flex-1 text-left truncate">{item.label}</span>}
                   </button>
                 ))}
+                {/* MENU KHUSUS PERSETUJUAN (Hanya Super Admin) */}
+                {authorizedProdi === 'SUPER_ADMIN' && (
+                  <button 
+                    onClick={() => { 
+                      setActiveMenu('requests'); 
+                      if (window.innerWidth <= 1024) setSidebarOpen(false); 
+                    }} 
+                    className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl font-bold text-sm transition-all relative ${
+                      activeMenu === 'requests' 
+                        ? 'bg-amber-500 text-white shadow-xl shadow-amber-500/20' 
+                        : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                    }`}
+                  >
+                    <Wifi size={20} className="shrink-0" />
+                    
+                    {(isSidebarOpen || window.innerWidth <= 1024) && (
+                      <span className="flex-1 text-left truncate">Persetujuan</span>
+                    )}
+
+                    {/* --- BADGE NOTIFIKASI (REAL-TIME) --- */}
+                    {moveRequests.length > 0 && (
+                      <span className={`absolute ${isSidebarOpen ? 'right-4' : 'right-2 top-2'} 
+                        bg-red-600 text-white text-[9px] font-black h-5 w-5 rounded-full 
+                        flex items-center justify-center border-2 border-white dark:border-slate-900 
+                        animate-bounce shadow-lg z-50`}
+                      >
+                        {moveRequests.length}
+                      </span>
+                    )}
+                  </button>
+                )}
               </nav>
             </div>
 
@@ -1318,7 +1774,7 @@
                       className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 dark:bg-blue-600 text-white rounded-xl text-[10px] sm:text-xs font-black shadow-md shrink-0 transition-all hover:opacity-90"
                     >
                       <FileUp size={16} /> 
-                      <span className="hidden sm:inline">Update Jadwal</span>
+                      <span className="hidden sm:inline">Upload Excel</span>
                       <span className="sm:hidden uppercase font-black">Excel</span>
                     </button>
 
@@ -1385,6 +1841,79 @@
                   <>
                     {activeMenu === 'dashboard' && (
                       <div className="animate-in">
+                        {/* --- PUSAT PEMELIHARAAN DATABASE (SUPER ADMIN ONLY) --- */}
+                        {authorizedProdi === 'SUPER_ADMIN' && (
+                          <div className="no-print mt-4 mb-8 p-6 bg-slate-900 border-2 border-dashed border-slate-700 rounded-[2.5rem] animate-in shadow-2xl">
+                            <div className="flex items-center gap-4 mb-6">
+                              <div className="bg-amber-500 p-3 rounded-2xl text-white shadow-lg">
+                                <Database size={20} />
+                              </div>
+                              <div>
+                                <h4 className="text-sm font-black text-white uppercase tracking-tighter">Pusat Pemeliharaan Cloud</h4>
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Kontrol Penghapusan Massal & Perbaikan Data</p>
+                              </div>
+                            </div>
+                            
+                            <div className="flex flex-wrap gap-3">
+                              {/* Tombol Perbaikan Dashboard */}
+                              <button 
+                                onClick={scanDatabaseAnomalies}
+                                className="px-5 py-3 bg-white text-slate-900 text-[10px] font-black uppercase rounded-2xl hover:bg-blue-500 hover:text-white transition-all shadow-sm flex items-center gap-2"
+                              >
+                                🔍 Scan & Diagnosa
+                              </button>
+                              <button 
+                                onClick={async () => {
+                                  const toDelete = schedules.filter(s => !s.id || !s.matkul || s.matkul.trim() === "");
+                                  if (toDelete.length === 0) return setToast("✅ Tidak ada data corrupt.");
+                                  if (!confirm(`⚠️ Hapus ${toDelete.length} data corrupt?`)) return;
+                                  const batch = writeBatch(db);
+                                  toDelete.forEach(d => { if(d.id) batch.delete(doc(db, 'artifacts', appId, 'public', 'data', 'schedules', d.id.toString())); });
+                                  await batch.commit();
+                                  setToast("🗑️ Data Corrupt Dibersihkan!");
+                                }}
+                                className="px-5 py-3 bg-white text-slate-900 text-[10px] font-black uppercase rounded-2xl hover:bg-blue-500 hover:text-white transition-all shadow-sm flex items-center gap-2"
+                              >
+                                🚀 Bersihkan Jadwal Corrupt
+                              </button>
+                              
+                              <button 
+                                onClick={async () => {
+                                  const ghosts = schedules.filter(s => s.isVacated === true);
+                                  if (ghosts.length === 0) return setToast("✅ Tidak ada Ghost Slot.");
+                                  if (!confirm(`Hapus ${ghosts.length} Ghost Slot?`)) return;
+                                  const batch = writeBatch(db);
+                                  ghosts.forEach(g => { batch.delete(doc(db, 'artifacts', appId, 'public', 'data', 'schedules', g.id)); });
+                                  await batch.commit();
+                                  setToast("👻 Ghost Slots Dibersihkan!");
+                                }}
+                                className="px-5 py-3 bg-white text-slate-900 text-[10px] font-black uppercase rounded-2xl hover:bg-blue-500 hover:text-white transition-all shadow-sm flex items-center gap-2"
+                              >
+                                👻 Bersihkan Ghost Slots
+                              </button>
+
+                              {/* Tombol Pembersihan Riwayat (Pindahan dari Menu Riwayat) */}
+                              <button 
+                                onClick={handleClearAllHistory}
+                                className="px-5 py-3 bg-white text-slate-900 text-[10px] font-black uppercase rounded-2xl hover:bg-blue-500 hover:text-white transition-all shadow-sm flex items-center gap-2"
+                              >
+                                <History size={14} /> Bersihkan Semua Log Riwayat
+                              </button>
+                              
+                              <button 
+                                onClick={handleRestoreAndClean}
+                                className="px-5 py-3 bg-white text-slate-900 text-[10px] font-black uppercase rounded-2xl hover:bg-blue-500 hover:text-white transition-all shadow-sm flex items-center gap-2"
+                              >
+                                <RotateCcw size={14} /> Revert ke Jadwal Awal ({selectedProdi})
+                              </button>
+
+                              {authorizedProdi === 'SUPER_ADMIN' && (
+                              <button onClick={handleClearAll} className="flex items-center gap-2 px-4 py-3 bg-red-50 dark:bg-red-900/20 text-red-600 rounded-2xl font-black text-[10px] uppercase shadow-sm hover:bg-red-600 hover:text-white transition-all"><Trash2 size={16}/> Hapus Semua Database</button>
+                            )}
+                            </div>
+                          </div>
+                        )}
+
                         {/* 1. STATISTIK DASHBOARD */}
                         <div className="no-print grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 lg:gap-6 mb-8 lg:mb-10">
                           <div className="bg-white dark:bg-slate-900 p-5 sm:p-6 rounded-[2rem] border dark:border-slate-800 shadow-sm flex items-center gap-4 sm:gap-6 overflow-hidden">
@@ -1401,69 +1930,27 @@
                           </div>
                         </div>
 
-                        {/* --- PANEL MASTER PASSCODE CLOUD (COLLAPSIBLE) --- */}
+                        {/* PANEL MASTER PASSCODE */}
                         {authorizedProdi === 'SUPER_ADMIN' && isSidebarOpen && (
                           <div className="px-4 mb-6 animate-in">
                             <div className="bg-amber-50 dark:bg-amber-900/10 border-2 border-dashed border-amber-200 dark:border-amber-800/50 p-4 rounded-[2rem] transition-all duration-300">
-                              
-                              {/* Header Panel (Toggle) */}
-                              <button 
-                                type="button"
-                                onClick={() => setIsPasscodeExpanded(!isPasscodeExpanded)}
-                                className="flex items-center justify-between w-full group focus:outline-none"
-                              >
+                              <button type="button" onClick={() => setIsPasscodeExpanded(!isPasscodeExpanded)} className="flex items-center justify-between w-full group focus:outline-none">
                                 <div className="flex items-center gap-2">
-                                  <div className="bg-amber-500 p-1.5 rounded-lg text-white shadow-sm">
-                                    <Lock size={12} />
-                                  </div>
-                                  <span className="text-[9px] font-black text-amber-600 dark:text-amber-400 uppercase tracking-widest text-left">
-                                    Cloud Passcodes
-                                  </span>
+                                  <div className="bg-amber-500 p-1.5 rounded-lg text-white shadow-sm"><Lock size={12} /></div>
+                                  <span className="text-[9px] font-black text-amber-600 dark:text-amber-400 uppercase tracking-widest">Cloud Passcodes</span>
                                 </div>
-                                <div className="text-amber-400 group-hover:text-amber-600">
-                                  {isPasscodeExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                                </div>
+                                <div className="text-amber-400 group-hover:text-amber-600">{isPasscodeExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</div>
                               </button>
-                              
-                              {/* Konten Daftar Passcode */}
                               {isPasscodeExpanded && (
                                 <div className="mt-4 space-y-2 max-h-60 overflow-y-auto custom-scrollbar pr-1 animate-in">
                                   {Object.entries(cloudPasscodeMap || {}).filter(([_, name]) => name !== 'SUPER_ADMIN').sort((a, b) => a[1].localeCompare(b[1])).map(([code, name]) => (
                                     <div key={code} className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-amber-100 dark:border-amber-900/30 flex flex-col gap-1 group hover:border-amber-500 transition-all relative">
                                       <span className="text-[7px] font-black text-slate-400 uppercase truncate pr-10">{name}</span>
                                       <div className="flex items-center justify-between">
-                                        <span className="text-[10px] font-black text-blue-600 dark:text-blue-400 tracking-tight">
-                                          {code}
-                                        </span>
-                                        
-                                        {/* Bagian Tombol Aksi */}
+                                        <span className="text-[10px] font-black text-blue-600 dark:text-blue-400">{code}</span>
                                         <div className="flex gap-1 items-center relative z-[100]">
-                                          <button 
-                                            type="button"
-                                            onClick={(e) => { 
-                                              e.preventDefault();
-                                              e.stopPropagation();
-                                              navigator.clipboard.writeText(code); 
-                                              setToast(`Salin: ${name}`); 
-                                            }} 
-                                            className="text-slate-300 hover:text-amber-600 p-1.5 rounded-md hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-all pointer-events-auto"
-                                            title="Salin"
-                                          >
-                                            <Copy size={12} />
-                                          </button>
-                                          <button 
-                                            type="button"
-                                            onClick={(e) => { 
-                                              e.preventDefault();
-                                              e.stopPropagation();
-                                              setAdminEditData({ prodi: name, oldCode: code, newCode: '' }); 
-                                              setShowAdminEditModal(true); 
-                                            }} 
-                                            className="text-slate-300 hover:text-blue-600 p-1.5 rounded-md hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-all pointer-events-auto"
-                                            title="Edit"
-                                          >
-                                            <Pencil size={12} />
-                                          </button>
+                                          <button type="button" onClick={() => { navigator.clipboard.writeText(code); setToast(`Salin: ${name}`); }} className="text-slate-300 hover:text-amber-600 p-1.5"><Copy size={12} /></button>
+                                          <button type="button" onClick={() => { setAdminEditData({ prodi: name, oldCode: code, newCode: '' }); setShowAdminEditModal(true); }} className="text-slate-300 hover:text-blue-600 p-1.5"><Pencil size={12} /></button>
                                         </div>
                                       </div>
                                     </div>
@@ -1474,88 +1961,80 @@
                           </div>
                         )}
 
-                        {/* 2. HEADER JUDUL & TOMBOL DASHBOARD */}
+                        {/* HEADER JUDUL */}
                         <div className="no-print mb-8 flex flex-col lg:flex-row lg:items-end justify-between gap-6">
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-3">
                               <h2 className="text-xl sm:text-2xl lg:text-3xl font-black text-slate-800 dark:text-white tracking-tighter uppercase leading-none break-word-custom">{selectedProdi}</h2>
-                              <span className="bg-blue-600 text-white text-[9px] font-black px-3 py-1 rounded-full uppercase shadow-lg shadow-blue-500/20 whitespace-nowrap">
-                                {searchTerm ? `${filteredSchedules.length} Hasil` : `${filteredSchedules.length} Matkul`}
-                              </span>
+                              <span className="bg-blue-600 text-white text-[9px] font-black px-3 py-1 rounded-full uppercase shadow-lg">{filteredSchedules.length} Matkul</span>
                             </div>
-                            <p className="text-slate-400 dark:text-slate-500 font-bold text-[10px] uppercase tracking-widest mt-2">Visualisasi Jadwal Cloud Real-time</p>
+                            <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mt-2">Visualisasi Jadwal Cloud Real-time</p>
                           </div>
                           <div className="flex flex-wrap gap-2">
-                            {authorizedProdi === 'SUPER_ADMIN' && (
-                                <button onClick={handleClearAll} className="flex-1 lg:flex-none flex items-center justify-center gap-2 px-4 py-3 bg-red-50 dark:bg-red-900/20 text-red-600 rounded-2xl font-black text-[10px] uppercase shadow-sm hover:bg-red-600 hover:text-white transition-all"><Trash2 size={16} className="shrink-0"/> <span className="hidden sm:inline">Hapus Database</span><span className="sm:hidden">Reset</span></button>
-                            )}
-                            <button onClick={downloadExcel} className="flex-1 lg:flex-none flex items-center justify-center gap-2 px-4 py-3 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl font-black text-[10px] uppercase shadow-sm hover:bg-slate-900 hover:text-white transition-all"><Download size={16} className="shrink-0"/> <span className="hidden sm:inline">Download Excel</span><span className="sm:hidden">Excel</span></button>
-                            <button onClick={() => window.print()} className="flex-1 lg:flex-none flex items-center justify-center gap-2 px-6 py-3 bg-slate-900 dark:bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg hover:opacity-90 transition-all"><Printer size={16} className="shrink-0"/> Cetak PDF</button>
+                            <button onClick={downloadExcel} className="flex items-center gap-2 px-4 py-3 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl font-black text-[10px] uppercase shadow-sm hover:bg-slate-900 hover:text-white transition-all"><Download size={16}/> Excel</button>
+                            <button onClick={() => window.print()} className="flex items-center gap-2 px-6 py-3 bg-slate-900 dark:bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg"><Printer size={16}/> Cetak PDF</button>
                           </div>
                         </div>
-                        
-                        {/* TOMBOL SORTING & FILTER DASHBOARD */}
+
+                        {/* SORTING */}
                         <div className="no-print flex flex-wrap gap-2 mb-8 pb-6 border-b dark:border-slate-800">
-                          {[
-                            { label: 'Hari', key: 'hari' },
-                            { label: 'Matakuliah', key: 'matkul' },
-                            { label: 'Dosen', key: 'dosen' },
-                            { label: 'Ruangan', key: 'ruangan' }
-                          ].map((btn) => (
-                            <button
-                              key={btn.key}
-                              onClick={() => {
-                                const direction = sortConfig.key === btn.key && sortConfig.direction === 'asc' ? 'desc' : 'asc';
-                                setSortConfig({ key: btn.key, direction });
-                              }}
-                              className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase flex items-center gap-2 transition-all ${
-                                sortConfig.key === btn.key 
-                                ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' 
-                                : 'bg-white dark:bg-slate-900 text-slate-500 border dark:border-slate-800 hover:bg-slate-50'
-                              }`}
-                            >
-                              <ArrowUpDown size={12} />
-                              {btn.label}
-                              {sortConfig.key === btn.key && (
-                                <span className="ml-1 opacity-60 text-[8px]">{sortConfig.direction === 'asc' ? '↑' : '↓'}</span>
-                              )}
+                          {['hari', 'matkul', 'dosen', 'ruangan'].map((k) => (
+                            <button key={k} onClick={() => handleSort(k)} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase flex items-center gap-2 transition-all ${sortConfig.key === k ? 'bg-blue-600 text-white shadow-lg' : 'bg-white dark:bg-slate-900 text-slate-500 border dark:border-slate-800 hover:bg-slate-50'}`}>
+                              <ArrowUpDown size={12} /> {k} {sortConfig.key === k && (sortConfig.direction === 'asc' ? '↑' : '↓')}
                             </button>
                           ))}
                         </div>
-                        {/* 3. GRID KARTU JADWAL */}
+
+                        {/* GRID KARTU JADWAL */}
                         <div className="no-print grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 lg:gap-6">
                           {filteredSchedules.map((item) => (
                             <div key={item.id} className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-[2rem] p-5 lg:p-6 shadow-sm hover:shadow-2xl transition-all flex flex-col group relative overflow-hidden h-full">
+                              
+                              {/* TOMBOL EDIT & DELETE (INJECTION START) */}
+                              {authorizedProdi && (authorizedProdi === 'SUPER_ADMIN') && (
+                                <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-all z-20">
+                                  <button 
+                                    onClick={() => handleOpenEdit(item)}
+                                    className="w-8 h-8 bg-blue-600 text-white rounded-xl flex items-center justify-center shadow-lg hover:scale-110 transition-transform"
+                                    title="Edit Jadwal"
+                                  >
+                                    <Pencil size={14} />
+                                  </button>
+                                  <button 
+                                    onClick={() => handleDeleteData(item.id, item.matkul)}
+                                    className="w-8 h-8 bg-red-600 text-white rounded-xl flex items-center justify-center shadow-lg hover:scale-110 transition-transform"
+                                    title="Hapus Jadwal"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+                              )}
+                              {/* TOMBOL EDIT & DELETE (INJECTION END) */}
+
                               <div className="mb-4">
                                 <div className="flex justify-between items-start mb-3 gap-2">
-                                  <span className="bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-[10px] font-black px-2 py-1 rounded-lg uppercase whitespace-nowrap truncate max-w-[120px]">{item.kelas} • SMT {item.semester}</span>
-                                  <span className="text-[10px] font-bold text-slate-300 dark:text-slate-600 uppercase tracking-tight shrink-0">{item.sks} SKS</span>
+                                  <span className="bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-[10px] font-black px-2 py-1 rounded-lg uppercase truncate">{item.kelas} • SMT {item.semester}</span>
+                                  <span className="text-[10px] font-bold text-slate-300 uppercase shrink-0">{item.sks} SKS</span>
                                 </div>
                                 <h3 className="text-base lg:text-lg font-bold text-slate-800 dark:text-white leading-tight h-12 line-clamp-2 uppercase group-hover:text-blue-600 break-word-custom">{item.matkul}</h3>
-                                <p className="text-[11px] font-black text-blue-500 dark:text-blue-400 mt-2 uppercase truncate break-word-custom">{item.dosen}</p>
+                                <p className="text-[11px] font-black text-blue-500 dark:text-blue-400 mt-2 uppercase truncate">{item.dosen}</p>
                               </div>
 
-                              {/* INDIKATOR PERUBAHAN (NOTIFIKASI) */}
-                                {item.keterangan_rapat && item.keterangan_rapat !== "-" && item.keterangan_rapat !== "" && (
-                                  <div className="mb-4 animate-bounce-subtle">
-                                    <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 p-3 rounded-2xl flex items-start gap-3">
-                                      <div className="bg-amber-500 p-1.5 rounded-lg text-white shrink-0 mt-0.5 shadow-sm">
-                                        <AlertTriangle size={12} />
-                                      </div>
-                                      <div className="overflow-hidden">
-                                        <p className="text-[9px] font-black text-amber-600 dark:text-amber-400 uppercase tracking-widest mb-1">
-                                          Pembaruan Jadwal
-                                        </p>
-                                        <p className="text-[10px] font-bold text-slate-600 dark:text-slate-300 leading-tight italic">
-                                          {item.keterangan_rapat}
-                                        </p>
-                                      </div>
+                              {item.keterangan_rapat && item.keterangan_rapat !== "-" && (
+                                <div className="mb-4 animate-bounce-subtle">
+                                  <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 p-3 rounded-2xl flex items-start gap-3">
+                                    <div className="bg-amber-500 p-1.5 rounded-lg text-white shrink-0 mt-0.5"><AlertTriangle size={12} /></div>
+                                    <div className="overflow-hidden">
+                                      <p className="text-[9px] font-black text-amber-600 uppercase mb-1">Update Cloud</p>
+                                      <p className="text-[10px] font-bold text-slate-600 dark:text-slate-300 leading-tight italic">{item.keterangan_rapat}</p>
                                     </div>
                                   </div>
-                                )}
+                                </div>
+                              )}
+
                               <div className="mt-auto bg-slate-50 dark:bg-slate-800/50 rounded-2xl p-4 space-y-2 border border-transparent dark:border-slate-800/50">
-                                <div className="flex items-center gap-3 text-[11px] font-bold text-slate-600 dark:text-slate-400 min-w-0"><Calendar size={13} className="text-blue-500 shrink-0" /><span className="truncate">{item.hari}, {item.waktu}</span></div>
-                                <div className="flex items-center gap-3 text-[11px] font-bold text-slate-600 dark:text-slate-400 min-w-0"><MapPin size={13} className="text-indigo-500 shrink-0" /><span className="truncate">{item.ruangan}</span></div>
+                                <div className="flex items-center gap-3 text-[11px] font-bold text-slate-600 dark:text-slate-400"><Calendar size={13} className="text-blue-500 shrink-0" /><span className="truncate">{item.hari}, {item.waktu}</span></div>
+                                <div className="flex items-center gap-3 text-[11px] font-bold text-slate-600 dark:text-slate-400"><MapPin size={13} className="text-indigo-500 shrink-0" /><span className="truncate">{item.ruangan}</span></div>
                               </div>
                             </div>
                           ))}
@@ -1805,16 +2284,27 @@
                     {activeMenu === 'history' && (
                       <div className="animate-in space-y-6">
                         <div className="bg-white dark:bg-slate-900 p-6 lg:p-10 rounded-[2.5rem] lg:rounded-[3.5rem] shadow-sm border dark:border-slate-800 overflow-hidden">
-                             <div className="flex flex-col lg:flex-row lg:items-center justify-between mb-10 pb-8 border-b dark:border-slate-800 gap-6">
-                                <div className="flex items-center gap-4 sm:gap-5 overflow-hidden">
-                                  <div className="bg-blue-600 p-3 sm:p-4 rounded-2xl sm:rounded-3xl text-white shadow-xl shadow-blue-500/30 shrink-0"><FileText size={28} /></div>
-                                  <div className="min-w-0">
-                                    <h2 className="text-xl sm:text-2xl lg:text-3xl font-black text-slate-800 dark:text-white uppercase leading-none truncate break-word-custom">Berita Acara</h2>
-                                    <p className="text-slate-500 font-bold text-[9px] lg:text-[10px] uppercase mt-2 truncate">Log Audit Sinkronisasi Awan</p>
-                                  </div>
-                                </div>
-                             </div>
-                             <div className="space-y-6">
+                          
+                          {/* Header Berita Acara */}
+                          <div className="flex flex-col lg:flex-row lg:items-center justify-between mb-10 pb-8 border-b dark:border-slate-800 gap-6">
+                            <div className="flex items-center gap-4 sm:gap-5 overflow-hidden">
+                              <div className="bg-blue-600 p-3 sm:p-4 rounded-2xl sm:rounded-3xl text-white shadow-xl shadow-blue-500/30 shrink-0">
+                                <FileText size={28} />
+                              </div>
+                              <div className="min-w-0">
+                                <h2 className="text-xl sm:text-2xl lg:text-3xl font-black text-slate-800 dark:text-white uppercase leading-none truncate break-word-custom">
+                                  Berita Acara
+                                </h2>
+                                <p className="text-slate-500 font-bold text-[9px] lg:text-[10px] uppercase mt-2 truncate">
+                                  Log Audit Sinkronisasi Awan
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                          
+                          <div className="space-y-6">
+                            {/* Toolbar Multi-Select & Undo (Hanya muncul jika ada data) */}
+                            {historyLog.length > 0 && (
                               <div className="flex flex-wrap gap-2 mb-6">
                                 <button 
                                   onClick={handleSelectAllHistory}
@@ -1825,73 +2315,174 @@
                                     : "Pilih Semua"}
                                 </button>
                                 
-                                  {/* Tombol Batal Pilih & Undo di bawah ini tetap menggunakan kodingan lama Anda agar tidak double */}
-                                  {selectedHistoryIds.length > 0 && (
-                                    <>
-                                      <button 
-                                        onClick={() => setSelectedHistoryIds([])} 
-                                        className="flex items-center justify-center gap-2 px-4 py-3 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl font-black text-[9px] lg:text-[10px] uppercase transition-all shrink-0"
-                                      >
-                                        <XCircle size={14} /> Batal Pilih
-                                      </button>
-                                      
-                                      <button 
-                                        onClick={executeMultiUndo} 
-                                        className="flex items-center justify-center gap-2 px-5 py-3 bg-red-600 text-white rounded-2xl font-black text-[9px] lg:text-[10px] uppercase shadow-xl transition-all shrink-0"
-                                      >
-                                        <RotateCcw size={14} /> Undo {selectedHistoryIds.length} Data
-                                      </button>
-                                    </>
-                                  )}
+                                {selectedHistoryIds.length > 0 && (
+                                  <>
+                                    <button 
+                                      onClick={() => setSelectedHistoryIds([])} 
+                                      className="flex items-center justify-center gap-2 px-4 py-3 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl font-black text-[9px] lg:text-[10px] uppercase transition-all shrink-0"
+                                    >
+                                      <XCircle size={14} /> Batal Pilih
+                                    </button>
+                                    
+                                    <button 
+                                      onClick={executeMultiUndo} 
+                                      className="flex items-center justify-center gap-2 px-5 py-3 bg-red-600 text-white rounded-2xl font-black text-[9px] lg:text-[10px] uppercase shadow-xl transition-all shrink-0 animate-in zoom-in"
+                                    >
+                                      <RotateCcw size={14} /> Hapus {selectedHistoryIds.length} Log
+                                    </button>
+                                  </>
+                                )}
                               </div>
-                               {historyLog.length > 0 ? historyLog.map((log) => (
-                                 <div key={log.id} className={`relative bg-slate-50 dark:bg-slate-800/20 border-2 p-6 lg:p-8 rounded-[2.5rem] lg:rounded-[3rem] transition-all group overflow-hidden ${(authorizedProdi === 'SUPER_ADMIN' || authorizedProdi === log.prodi) && selectedHistoryIds.includes(log.id) ? 'border-blue-600 ring-4 ring-blue-600/10' : 'border-transparent hover:border-blue-400'}`}>
-                                   <div className="flex flex-col gap-6 overflow-hidden">
-                                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 overflow-hidden">
-                                       <div className="flex flex-wrap items-center gap-3 min-w-0">
-                                         {(authorizedProdi === 'SUPER_ADMIN' || authorizedProdi === log.prodi) && (
-                                           <button onClick={() => toggleHistorySelection(log.id)} className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all shrink-0 ${selectedHistoryIds.includes(log.id) ? 'bg-blue-600 text-white shadow-md' : 'bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 text-slate-300'}`}>
-                                              {selectedHistoryIds.includes(log.id) ? <CheckSquare size={16} /> : <Square size={16} />}
-                                           </button>
-                                         )}
-                                         <span className={`px-3 py-1.5 rounded-xl text-[9px] font-black uppercase shadow-sm shrink-0 ${log.type === 'SWAP' ? 'bg-orange-600 text-white' : 'bg-emerald-600 text-white'}`}>{log.type}</span>
-                                         <span className="px-3 py-1.5 bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 rounded-xl text-[9px] font-black uppercase tracking-tight truncate min-w-0">{log.prodi}</span>
-                                       </div>
-                                       <div className="md:text-right shrink-0"><p className="text-[8px] font-black text-slate-400 uppercase">{log.timestamp}</p><p className="text-[11px] lg:text-xs font-black text-slate-800 dark:text-white uppercase truncate">Oleh: {log.admin}</p></div>
-                                     </div>
-                                     <div className="bg-white dark:bg-slate-900 p-5 rounded-[1.75rem] border dark:border-slate-800 shadow-inner overflow-hidden">
-                                       <p className="text-[9px] font-black text-blue-600 uppercase mb-1 truncate">Berita Acara / Alasan:</p>
-                                       <p className="text-xs lg:text-sm font-bold text-slate-700 dark:text-slate-300 italic leading-relaxed break-word-custom">"{log.reason}"</p>
-                                     </div>
-                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                      {log.affected.map((aff, i) => (
+                            )}
+
+                            {/* List Riwayat Perubahan */}
+                            {Array.isArray(historyLog) && historyLog.length > 0 ? historyLog.map((log) => {
+                              const canManage = authorizedProdi === 'SUPER_ADMIN' || authorizedProdi === log.prodi;
+                              const isSelected = selectedHistoryIds.includes(log.id);
+
+                              return (
+                                <div 
+                                  key={log.docId || log.id} 
+                                  onClick={() => canManage && toggleHistorySelection(log.id)}
+                                  className={`relative bg-slate-50 dark:bg-slate-800/20 border-2 p-6 lg:p-8 rounded-[2.5rem] lg:rounded-[3rem] transition-all group overflow-hidden cursor-pointer ${canManage && isSelected ? 'border-blue-600 ring-4 ring-blue-600/10 shadow-md' : 'border-transparent hover:border-blue-400'}`}
+                                >
+                                  <div className="flex flex-col gap-6 overflow-hidden">
+                                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 overflow-hidden">
+                                      <div className="flex flex-wrap items-center gap-3 min-w-0">
+                                        {canManage && (
+                                          <div className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all shrink-0 ${isSelected ? 'bg-blue-600 text-white shadow-md' : 'bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 text-slate-300'}`}>
+                                            {isSelected ? <CheckSquare size={16} /> : <Square size={16} />}
+                                          </div>
+                                        )}
+                                        <span className={`px-3 py-1.5 rounded-xl text-[9px] font-black uppercase shadow-sm shrink-0 ${log.type === 'SWAP' ? 'bg-orange-600 text-white' : 'bg-emerald-600 text-white'}`}>
+                                          {log.type || 'MOVE'}
+                                        </span>
+                                        <span className="px-3 py-1.5 bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 rounded-xl text-[9px] font-black uppercase tracking-tight truncate min-w-0">
+                                          {log.prodi || 'PRODI'}
+                                        </span>
+                                      </div>
+                                      <div className="md:text-right shrink-0">
+                                        <p className="text-[8px] font-black text-slate-400 uppercase">{log.timestamp}</p>
+                                        <p className="text-[11px] lg:text-xs font-black text-slate-800 dark:text-white uppercase truncate">
+                                          Oleh: {log.admin || 'System'}
+                                        </p>
+                                      </div>
+                                    </div>
+                                    
+                                    <div className="bg-white dark:bg-slate-900 p-5 rounded-[1.75rem] border dark:border-slate-800 shadow-inner overflow-hidden">
+                                      <p className="text-[9px] font-black text-blue-600 uppercase mb-1 truncate">Berita Acara / Alasan:</p>
+                                      <p className="text-xs lg:text-sm font-bold text-slate-700 dark:text-slate-300 italic leading-relaxed break-word-custom">
+                                        "{log.reason || 'Tidak ada alasan yang dicantumkan'}"
+                                      </p>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                      {log.affected?.map((aff, i) => (
                                         <div key={i} className="bg-white dark:bg-slate-900 p-4 lg:p-5 rounded-[1.75rem] lg:rounded-[2rem] border dark:border-slate-800 shadow-sm overflow-hidden h-full flex flex-col">
-                                          <h4 className="text-[10px] lg:text-xs font-black uppercase text-blue-600 mb-4 truncate break-word-custom">{aff.matkul}</h4>
+                                          <h4 className="text-[10px] lg:text-xs font-black uppercase text-blue-600 mb-4 truncate break-word-custom">
+                                            {aff.matkul || 'Mata Kuliah'}
+                                          </h4>
                                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 flex-1">
                                             <div className="space-y-1 opacity-50 overflow-hidden">
                                               <p className="text-[7px] lg:text-[8px] font-black uppercase text-slate-400 truncate">Kondisi Asal</p>
-                                              <p className="text-[9px] lg:text-[10px] font-black leading-tight line-clamp-1 truncate">{aff.before.dosen}</p>
-                                              <p className="text-[9px] lg:text-[10px] font-bold whitespace-nowrap truncate">{aff.before.hari}, {aff.before.waktu}</p>
-                                              <p className="text-[8px] lg:text-[9px] font-black uppercase truncate">R: {aff.before.ruangan} • Kls: {aff.after.kelas}</p>
+                                              <p className="text-[9px] lg:text-[10px] font-black leading-tight truncate">{aff.before?.dosen || 'TBA'}</p>
+                                              <p className="text-[9px] lg:text-[10px] font-bold truncate">{aff.before?.hari}, {aff.before?.waktu}</p>
+                                              <p className="text-[8px] lg:text-[9px] font-black uppercase truncate">R: {aff.before?.ruangan} • Kls: {aff.before?.kelas || '-'}</p>
                                             </div>
                                             <div className="space-y-1 overflow-hidden border-t sm:border-t-0 sm:border-l sm:pl-4 dark:border-slate-800 pt-3 sm:pt-0">
                                               <p className="text-[7px] lg:text-[8px] font-black uppercase text-emerald-500 truncate">Kondisi Baru</p>
-                                              <p className="text-[9px] lg:text-[10px] font-black leading-tight line-clamp-1 truncate">{aff.after.dosen}</p>
-                                              <p className="text-[9px] lg:text-[10px] font-black text-emerald-600 whitespace-nowrap truncate">{aff.after.hari}, {aff.after.waktu}</p>
-                                              <p className="text-[8px] lg:text-[9px] font-black uppercase text-emerald-500/70 truncate">R: {aff.after.ruangan} • Kls: {aff.after.kelas}</p>
+                                              <p className="text-[9px] lg:text-[10px] font-black leading-tight truncate">{aff.after?.dosen || 'TBA'}</p>
+                                              <p className="text-[9px] lg:text-[10px] font-black text-emerald-600 truncate">{aff.after?.hari}, {aff.after?.waktu}</p>
+                                              <p className="text-[8px] lg:text-[9px] font-black uppercase text-emerald-500/70 truncate">R: {aff.after?.ruangan} • Kls: {aff.after?.kelas || '-'}</p>
                                             </div>
                                           </div>
                                         </div>
                                       ))}
                                     </div>
-                                     {(authorizedProdi === 'SUPER_ADMIN' || authorizedProdi === log.prodi) && !selectedHistoryIds.includes(log.id) && (
-                                        <button onClick={() => undoAction(log.id)} className="w-full sm:w-fit flex items-center justify-center gap-2 px-6 py-2.5 bg-red-50 hover:bg-red-600 text-red-600 hover:text-white rounded-xl text-[9px] font-black uppercase transition-all shadow-sm shrink-0">Batalkan Perubahan Ini</button>
-                                     )}
-                                   </div>
-                                 </div>
-                               )) : <p className="text-[10px] font-black text-slate-400 text-center py-10 uppercase italic">Belum ada riwayat perubahan</p>}
-                             </div>
+                                    
+                                    {/* Tombol Single Undo (Hanya jika tidak sedang dalam mode multi-select) */}
+                                    {canManage && selectedHistoryIds.length === 0 && (
+                                      <button 
+                                        onClick={(e) => { e.stopPropagation(); undoAction(log.id); }} 
+                                        className="w-full sm:w-fit flex items-center justify-center gap-2 px-6 py-2.5 bg-red-50 hover:bg-red-600 text-red-600 hover:text-white rounded-xl text-[9px] font-black uppercase transition-all shadow-sm shrink-0"
+                                      >
+                                        Hapus Log Ini
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            }) : (
+                              <div className="py-20 text-center border-2 border-dashed dark:border-slate-800 rounded-[3rem]">
+                                <p className="text-[10px] font-black text-slate-400 uppercase italic">Belum ada riwayat perubahan yang tercatat</p>
+                              </div>
+                            )}
+                          </div>
                         </div>
+                      </div>
+                    )}
+
+                    {activeMenu === 'requests' && (
+                      <div className="animate-in space-y-6">
+                        <div className="flex items-center gap-4 mb-8">
+                          <div className="bg-amber-500 p-3 rounded-2xl text-white shadow-lg">
+                            <Wifi size={24}/>
+                          </div>
+                          <div>
+                            <h2 className="text-2xl font-black uppercase tracking-tighter">Antrean Persetujuan</h2>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Permintaan Perubahan Jadwal dari Kaprodi</p>
+                          </div>
+                        </div>
+
+                        {moveRequests.length > 0 ? (
+                          <div className="grid grid-cols-1 gap-4">
+                            {moveRequests.map((req) => (
+                              <div key={req.docId} className="bg-white dark:bg-slate-900 p-6 rounded-[2.5rem] border-2 border-amber-100 dark:border-slate-800 shadow-sm flex flex-col lg:flex-row justify-between gap-6">
+                                <div className="flex-1 space-y-3">
+                                  <div className="flex items-center gap-2">
+                                    <span className="bg-amber-100 text-amber-600 text-[9px] font-black px-2 py-1 rounded-lg uppercase">Menunggu Persetujuan</span>
+                                    <span className="text-xs font-black dark:text-white uppercase">{req.prodi}</span>
+                                  </div>
+                                  <h4 className="text-lg font-black text-slate-800 dark:text-white uppercase">{req.dataAsal?.matkul}</h4>
+                                  
+                                  <div className="grid grid-cols-2 gap-4 bg-slate-50 dark:bg-slate-800/50 p-4 rounded-2xl border dark:border-slate-800">
+                                    <div>
+                                      <p className="text-[8px] font-black text-slate-400 uppercase">Dari (Lama):</p>
+                                      <p className="text-[10px] font-bold dark:text-slate-300">{req.dataAsal?.hari}, {req.dataAsal?.waktu} [{req.dataAsal?.ruangan}]</p>
+                                    </div>
+                                    <div>
+                                      <p className="text-[8px] font-black text-blue-500 uppercase">Ke (Baru):</p>
+                                      <p className="text-[10px] font-bold dark:text-slate-300">{req.targetSlot?.hari}, {req.targetSlot?.waktu} [{req.targetSlot?.ruangan}]</p>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-start gap-2 italic text-xs text-slate-500">
+                                    <span className="font-bold">Alasan:</span> "{req.reason}"
+                                  </div>
+                                </div>
+
+                                <div className="flex lg:flex-col gap-2 justify-center shrink-0">
+                                  <button 
+                                    onClick={() => handleApproveMove(req)}
+                                    className="flex-1 lg:w-32 py-3 bg-emerald-600 text-white rounded-xl font-black text-[10px] uppercase shadow-lg hover:bg-emerald-700 transition-all"
+                                  >
+                                    Setujui
+                                  </button>
+                                  <button 
+                                    onClick={() => handleRejectMove(req.docId)}
+                                    className="flex-1 lg:w-32 py-3 bg-slate-100 dark:bg-slate-800 text-slate-500 rounded-xl font-black text-[10px] uppercase"
+                                  >
+                                    Tolak
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="py-20 text-center opacity-40 uppercase font-black text-xs italic tracking-widest">
+                            Belum ada pengajuan perubahan jadwal saat ini.
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -1935,6 +2526,150 @@
                     </div>
                   </>
                 )}
+                {showEditModal && (
+  <div className="fixed inset-0 z-[700] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-md animate-in">
+    <div className="bg-white dark:bg-slate-900 w-full max-w-2xl rounded-[2.5rem] shadow-2xl p-8 border dark:border-slate-800 max-h-[90vh] overflow-y-auto custom-scrollbar">
+      
+      {/* Header Modal */}
+      <div className="flex justify-between items-center mb-6">
+        <div>
+          <h3 className="text-xl font-black text-blue-600 uppercase tracking-tighter">Edit Jadwal Kuliah</h3>
+          <p className="text-[10px] font-bold text-slate-400 uppercase mt-1">ID Dokumen: {editingId}</p>
+        </div>
+        <button 
+          onClick={() => {
+            setShowEditModal(false);
+            setEditingId(null);
+          }} 
+          className="text-slate-400 hover:text-red-500 transition-colors"
+        >
+          <X size={24}/>
+        </button>
+      </div>
+
+      <div className="space-y-4">
+        {/* Baris 1: Kode & Nama Matkul */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="space-y-1">
+            <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Kode Matkul</label>
+            <input 
+              type="text" 
+              value={formData.kode_matkul} 
+              onChange={e => setFormData({...formData, kode_matkul: e.target.value})} 
+              className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border border-transparent focus:border-blue-500" 
+            />
+          </div>
+          <div className="md:col-span-2 space-y-1">
+            <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Nama Mata Kuliah</label>
+            <input 
+              type="text" 
+              value={formData.matkul} 
+              onChange={e => setFormData({...formData, matkul: e.target.value})} 
+              className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border border-transparent focus:border-blue-500" 
+            />
+          </div>
+        </div>
+
+        {/* Baris 2: Dosen & Prodi */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-1">
+            <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Dosen Pengampu</label>
+            <input 
+              type="text" 
+              value={formData.dosen} 
+              onChange={e => setFormData({...formData, dosen: e.target.value})} 
+              className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none" 
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Program Studi</label>
+            <select 
+              value={formData.prodi} 
+              onChange={e => setFormData({...formData, prodi: e.target.value})} 
+              className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold outline-none dark:text-white border-none appearance-none"
+            >
+              <option value="">-- Pilih Prodi --</option>
+              {Object.values(cloudPasscodeMap || {}).filter(v => v !== 'SUPER_ADMIN').sort().map(p => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* Baris 3: Waktu & Ruangan */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="space-y-1">
+            <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Hari</label>
+            <select 
+              value={formData.hari} 
+              onChange={e => setFormData({...formData, hari: e.target.value})} 
+              className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-xl font-bold outline-none dark:text-white border-none"
+            >
+              {["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"].map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+          <div className="space-y-1">
+            <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Ruangan</label>
+            <input 
+              type="text" 
+              value={formData.ruangan} 
+              onChange={e => setFormData({...formData, ruangan: e.target.value})} 
+              className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-xl font-bold dark:text-white outline-none" 
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Kelas</label>
+            <input 
+              type="text" 
+              value={formData.kelas} 
+              onChange={e => setFormData({...formData, kelas: e.target.value})} 
+              className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-xl font-bold dark:text-white outline-none" 
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Waktu</label>
+            <input 
+              type="text" 
+              value={formData.waktu} 
+              onChange={e => setFormData({...formData, waktu: e.target.value})} 
+              className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-xl font-bold dark:text-white outline-none" 
+            />
+          </div>
+        </div>
+
+        {/* Baris 4: Keterangan / Catatan Perubahan */}
+        <div className="space-y-1">
+          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Alasan/Keterangan Perubahan</label>
+          <textarea 
+            value={formData.keterangan_rapat} 
+            onChange={e => setFormData({...formData, keterangan_rapat: e.target.value})} 
+            className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none h-24 resize-none"
+            placeholder="Contoh: Perubahan ruangan karena renovasi..."
+          />
+        </div>
+
+        {/* Action Buttons */}
+        <div className="pt-4 flex flex-col sm:flex-row gap-3">
+          <button 
+            onClick={() => {
+              setShowEditModal(false);
+              setEditingId(null);
+            }} 
+            className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-500 rounded-2xl font-black uppercase"
+          >
+            Batal
+          </button>
+          <button 
+            onClick={handleUpdateManual} 
+            className="flex-1 py-4 bg-blue-600 text-white rounded-2xl font-black uppercase shadow-lg shadow-blue-500/20 hover:opacity-90 transition-all"
+          >
+            Simpan Perubahan Cloud
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+)}
               </div>
             </main>
           </div>
@@ -1946,4 +2681,3 @@
   </script>
 </body>
 </html>
-
