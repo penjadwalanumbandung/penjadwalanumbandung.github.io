@@ -82,6 +82,7 @@
       SortAsc as SortIcon // Alias untuk ikon sort
     } from 'lucide-react';
 
+    
     // --- GLOBAL SAFETY CONFIG ---
     const appId = typeof __app_id !== 'undefined' ? __app_id : 'penjadwalanumbandung';
     let firebaseConfig = {
@@ -203,6 +204,8 @@
       const [editingItem, setEditingItem] = useState(null);
       const [showAddModal, setShowAddModal] = useState(false);
       const [moveRequests, setMoveRequests] = useState([]);
+      const [editingData, setEditingData] = useState(null); 
+      const [newCodeInput, setNewCodeInput] = useState("");
       const initialForm = {
         kode_matkul: '',
         matkul: '',
@@ -219,6 +222,25 @@
       };
       const [formData, setFormData] = useState(initialForm);
       
+      // Fungsi untuk membuka jendela edit
+      const startEditing = (prodi, currentCode) => {
+        setEditingData({ prodi, oldCode: currentCode });
+        setNewCodeInput(""); 
+      };
+
+      // Fungsi untuk menyimpan perubahan
+      const saveChanges = () => {
+        if (newCodeInput.length < 6) {
+          alert("Passcode harus 6 digit!");
+          return;
+        }
+        const updated = { ...passcodes };
+        delete updated[editingData.oldCode]; // Hapus kode lama
+        updated[newCodeInput] = editingData.prodi; // Tambah kode baru dengan prodi yang sama
+        setPasscodes(updated);
+        setEditingData(null); // Tutup jendela
+      };
+
       // FUNGSI SETUJUI PENGAJUAN (Hanya Admin)
       const handleApproveMove = async (req) => {
         const batch = writeBatch(db);
@@ -577,22 +599,27 @@
         }
 
         const updatedMap = { ...cloudPasscodeMap };
-        const oldKey = Object.keys(updatedMap).find(k => updatedMap[k] === adminEditData.prodi);
-        if (oldKey) delete updatedMap[oldKey];
+        // Hapus kunci (passcode) lama
+        delete updatedMap[adminEditData.oldCode];
+        // Tambah kunci baru dengan prodi yang sama
         updatedMap[adminEditData.newCode] = adminEditData.prodi;
 
         try {
+          setSyncStatus('Mengupdate...');
           const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'passcodes');
           await setDoc(configRef, { 
             map: updatedMap, 
             updatedAt: new Date().toISOString(),
             lastEditor: "SUPER_ADMIN" 
-          });
+          }, { merge: true });
           
           setToast(`✅ Passcode ${adminEditData.prodi} diperbarui!`);
           setShowAdminEditModal(false);
+          setSyncStatus('Sinkron');
         } catch (e) {
+          console.error(e);
           setToast("❌ Gagal update ke Cloud.");
+          setSyncStatus('Error');
         }
       };
 
@@ -1763,6 +1790,76 @@
                 </div>
               </div>
               <div className="flex items-center gap-2">
+                {/* PANEL CLOUD PASSCODES (VERSI HEADER) */}
+                {authorizedProdi === 'SUPER_ADMIN' && (
+                  <div className="relative">
+                    {/* 1. Tombol Trigger Icon Lock */}
+                    <button 
+                      type="button" 
+                      onClick={() => setIsPasscodeExpanded(!isPasscodeExpanded)} 
+                      className={`p-2 rounded-xl transition-all flex items-center justify-center
+                        ${isPasscodeExpanded 
+                          ? 'bg-amber-500 text-white shadow-lg' 
+                          : 'text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800'}`}
+                    >
+                      <Lock size={20} />
+                    </button>
+
+                    {/* 2. Dropdown Panel */}
+                    {isPasscodeExpanded && (
+                      <>
+                        {/* Layer ini berfungsi agar jika klik di luar, dropdown otomatis tertutup */}
+                        <div className="fixed inset-0 z-[60]" onClick={() => setIsPasscodeExpanded(false)} />
+                        
+                        <div className="absolute right-0 mt-3 w-72 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-2xl rounded-[2rem] z-[70] overflow-hidden animate-in fade-in zoom-in duration-200 origin-top-right">
+                          
+                          {/* Header Dropdown (Amber Area) */}
+                          <div className="bg-amber-50 dark:bg-amber-900/10 p-4 border-b border-amber-100 dark:border-amber-900/30">
+                            <div className="flex items-center gap-2">
+                              <div className="bg-amber-500 p-1.5 rounded-lg text-white shadow-sm"><Lock size={12} /></div>
+                              <span className="text-[10px] font-black text-amber-600 dark:text-amber-400 uppercase tracking-widest">Cloud Passcodes</span>
+                            </div>
+                          </div>
+
+                          {/* List Passcodes (Scrolled Area) */}
+                          <div className="p-2 space-y-1 max-h-80 overflow-y-auto custom-scrollbar">
+                            {Object.entries(cloudPasscodeMap || {})
+                              .filter(([_, name]) => name !== 'SUPER_ADMIN')
+                              .sort((a, b) => a[1].localeCompare(b[1]))
+                              .map(([code, name]) => (
+                                <div key={code} className="bg-slate-50 dark:bg-slate-900/50 p-3 rounded-2xl border border-transparent hover:border-amber-200 dark:hover:border-amber-900 transition-all flex flex-col gap-1 group">
+                                  <span className="text-[7px] font-black text-slate-400 uppercase truncate">{name}</span>
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[11px] font-black text-blue-600 dark:text-blue-400 tracking-wider">{code}</span>
+                                    <div className="flex gap-1 items-center">
+                                      <button 
+                                        type="button" 
+                                        onClick={() => { navigator.clipboard.writeText(code); setToast(`Salin: ${name}`); }} 
+                                        className="text-slate-300 hover:text-amber-600 p-1.5 transition-colors"
+                                      >
+                                        <Copy size={12} />
+                                      </button>
+                                      <button 
+                                        type="button" 
+                                        onClick={() => { 
+                                          setAdminEditData({ prodi: name, oldCode: code, newCode: '' }); 
+                                          setShowAdminEditModal(true); 
+                                          setIsPasscodeExpanded(false); // Otomatis tutup dropdown saat modal edit muncul
+                                        }} 
+                                        className="text-slate-300 hover:text-blue-600 p-1.5 transition-colors"
+                                      >
+                                        <Pencil size={12} />
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
                 <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition-all shrink-0">
                   {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
                 </button>
@@ -1929,37 +2026,6 @@
                             <div className="min-w-0"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest truncate">Ruang Aktif</p><p className="text-xl sm:text-2xl font-black dark:text-white">{stats.totalRuang}</p></div>
                           </div>
                         </div>
-
-                        {/* PANEL MASTER PASSCODE */}
-                        {authorizedProdi === 'SUPER_ADMIN' && isSidebarOpen && (
-                          <div className="px-4 mb-6 animate-in">
-                            <div className="bg-amber-50 dark:bg-amber-900/10 border-2 border-dashed border-amber-200 dark:border-amber-800/50 p-4 rounded-[2rem] transition-all duration-300">
-                              <button type="button" onClick={() => setIsPasscodeExpanded(!isPasscodeExpanded)} className="flex items-center justify-between w-full group focus:outline-none">
-                                <div className="flex items-center gap-2">
-                                  <div className="bg-amber-500 p-1.5 rounded-lg text-white shadow-sm"><Lock size={12} /></div>
-                                  <span className="text-[9px] font-black text-amber-600 dark:text-amber-400 uppercase tracking-widest">Cloud Passcodes</span>
-                                </div>
-                                <div className="text-amber-400 group-hover:text-amber-600">{isPasscodeExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</div>
-                              </button>
-                              {isPasscodeExpanded && (
-                                <div className="mt-4 space-y-2 max-h-60 overflow-y-auto custom-scrollbar pr-1 animate-in">
-                                  {Object.entries(cloudPasscodeMap || {}).filter(([_, name]) => name !== 'SUPER_ADMIN').sort((a, b) => a[1].localeCompare(b[1])).map(([code, name]) => (
-                                    <div key={code} className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-amber-100 dark:border-amber-900/30 flex flex-col gap-1 group hover:border-amber-500 transition-all relative">
-                                      <span className="text-[7px] font-black text-slate-400 uppercase truncate pr-10">{name}</span>
-                                      <div className="flex items-center justify-between">
-                                        <span className="text-[10px] font-black text-blue-600 dark:text-blue-400">{code}</span>
-                                        <div className="flex gap-1 items-center relative z-[100]">
-                                          <button type="button" onClick={() => { navigator.clipboard.writeText(code); setToast(`Salin: ${name}`); }} className="text-slate-300 hover:text-amber-600 p-1.5"><Copy size={12} /></button>
-                                          <button type="button" onClick={() => { setAdminEditData({ prodi: name, oldCode: code, newCode: '' }); setShowAdminEditModal(true); }} className="text-slate-300 hover:text-blue-600 p-1.5"><Pencil size={12} /></button>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        )}
 
                         {/* HEADER JUDUL */}
                         <div className="no-print mb-8 flex flex-col lg:flex-row lg:items-end justify-between gap-6">
@@ -2501,7 +2567,8 @@
                             return (<div key={day} className="day-section"><h3 style={{fontSize: '11pt', fontWeight: 'bold', marginBottom: '8px', paddingLeft: '8px', borderLeft: '4px solid #000'}}>{day.toUpperCase()}</h3><table className="w-full"><thead><tr><th style={{width: '15%'}}>WAKTU</th><th style={{width: '35%'}}>MATAKULIAH</th><th style={{width: '25%'}}>DOSEN</th><th style={{width: '8%', textAlign: 'center'}}>KLS</th><th style={{width: '12%', textAlign: 'center'}}>RUANG</th></tr></thead><tbody>{daySchedules.map((item) => (<tr key={item.id}><td style={{fontWeight: 'bold'}}>{item.waktu}</td><td><div style={{fontWeight: 'bold', fontSize: '8.5pt'}}>{item.matkul.toUpperCase()}</div><div style={{fontSize: '7pt'}}>Semester {item.semester} • {item.sks} SKS</div></td><td style={{fontSize: '7.5pt'}}>{item.dosen.toUpperCase()}</td><td style={{textAlign: 'center'}}>{item.kelas}</td><td style={{textAlign: 'center', fontWeight: 'bold'}}>{item.ruangan}</td></tr>))}</tbody></table></div>);
                           })}
                         </div>
-                        {/* MODAL ADMIN EDIT PASSCODE PRODI */}
+                    </div>
+                    {/* MODAL ADMIN EDIT PASSCODE PRODI */}
                         {showAdminEditModal && (
                           <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-md animate-in">
                             <div className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-[2.5rem] shadow-2xl p-8 border dark:border-slate-800 animate-scale-in">
@@ -2523,153 +2590,152 @@
                             </div>
                           </div>
                         )}
-                    </div>
                   </>
                 )}
                 {showEditModal && (
-  <div className="fixed inset-0 z-[700] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-md animate-in">
-    <div className="bg-white dark:bg-slate-900 w-full max-w-2xl rounded-[2.5rem] shadow-2xl p-8 border dark:border-slate-800 max-h-[90vh] overflow-y-auto custom-scrollbar">
-      
-      {/* Header Modal */}
-      <div className="flex justify-between items-center mb-6">
-        <div>
-          <h3 className="text-xl font-black text-blue-600 uppercase tracking-tighter">Edit Jadwal Kuliah</h3>
-          <p className="text-[10px] font-bold text-slate-400 uppercase mt-1">ID Dokumen: {editingId}</p>
-        </div>
-        <button 
-          onClick={() => {
-            setShowEditModal(false);
-            setEditingId(null);
-          }} 
-          className="text-slate-400 hover:text-red-500 transition-colors"
-        >
-          <X size={24}/>
-        </button>
-      </div>
+                <div className="fixed inset-0 z-[700] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-md animate-in">
+                  <div className="bg-white dark:bg-slate-900 w-full max-w-2xl rounded-[2.5rem] shadow-2xl p-8 border dark:border-slate-800 max-h-[90vh] overflow-y-auto custom-scrollbar">
+                    
+                    {/* Header Modal */}
+                    <div className="flex justify-between items-center mb-6">
+                      <div>
+                        <h3 className="text-xl font-black text-blue-600 uppercase tracking-tighter">Edit Jadwal Kuliah</h3>
+                        <p className="text-[10px] font-bold text-slate-400 uppercase mt-1">ID Dokumen: {editingId}</p>
+                      </div>
+                      <button 
+                        onClick={() => {
+                          setShowEditModal(false);
+                          setEditingId(null);
+                        }} 
+                        className="text-slate-400 hover:text-red-500 transition-colors"
+                      >
+                        <X size={24}/>
+                      </button>
+                    </div>
 
-      <div className="space-y-4">
-        {/* Baris 1: Kode & Nama Matkul */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="space-y-1">
-            <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Kode Matkul</label>
-            <input 
-              type="text" 
-              value={formData.kode_matkul} 
-              onChange={e => setFormData({...formData, kode_matkul: e.target.value})} 
-              className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border border-transparent focus:border-blue-500" 
-            />
-          </div>
-          <div className="md:col-span-2 space-y-1">
-            <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Nama Mata Kuliah</label>
-            <input 
-              type="text" 
-              value={formData.matkul} 
-              onChange={e => setFormData({...formData, matkul: e.target.value})} 
-              className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border border-transparent focus:border-blue-500" 
-            />
-          </div>
-        </div>
+                    <div className="space-y-4">
+                      {/* Baris 1: Kode & Nama Matkul */}
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Kode Matkul</label>
+                          <input 
+                            type="text" 
+                            value={formData.kode_matkul} 
+                            onChange={e => setFormData({...formData, kode_matkul: e.target.value})} 
+                            className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border border-transparent focus:border-blue-500" 
+                          />
+                        </div>
+                        <div className="md:col-span-2 space-y-1">
+                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Nama Mata Kuliah</label>
+                          <input 
+                            type="text" 
+                            value={formData.matkul} 
+                            onChange={e => setFormData({...formData, matkul: e.target.value})} 
+                            className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border border-transparent focus:border-blue-500" 
+                          />
+                        </div>
+                      </div>
 
-        {/* Baris 2: Dosen & Prodi */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="space-y-1">
-            <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Dosen Pengampu</label>
-            <input 
-              type="text" 
-              value={formData.dosen} 
-              onChange={e => setFormData({...formData, dosen: e.target.value})} 
-              className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none" 
-            />
-          </div>
-          <div className="space-y-1">
-            <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Program Studi</label>
-            <select 
-              value={formData.prodi} 
-              onChange={e => setFormData({...formData, prodi: e.target.value})} 
-              className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold outline-none dark:text-white border-none appearance-none"
-            >
-              <option value="">-- Pilih Prodi --</option>
-              {Object.values(cloudPasscodeMap || {}).filter(v => v !== 'SUPER_ADMIN').sort().map(p => (
-                <option key={p} value={p}>{p}</option>
-              ))}
-            </select>
-          </div>
-        </div>
+                      {/* Baris 2: Dosen & Prodi */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Dosen Pengampu</label>
+                          <input 
+                            type="text" 
+                            value={formData.dosen} 
+                            onChange={e => setFormData({...formData, dosen: e.target.value})} 
+                            className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none" 
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Program Studi</label>
+                          <select 
+                            value={formData.prodi} 
+                            onChange={e => setFormData({...formData, prodi: e.target.value})} 
+                            className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold outline-none dark:text-white border-none appearance-none"
+                          >
+                            <option value="">-- Pilih Prodi --</option>
+                            {Object.values(cloudPasscodeMap || {}).filter(v => v !== 'SUPER_ADMIN').sort().map(p => (
+                              <option key={p} value={p}>{p}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
 
-        {/* Baris 3: Waktu & Ruangan */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className="space-y-1">
-            <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Hari</label>
-            <select 
-              value={formData.hari} 
-              onChange={e => setFormData({...formData, hari: e.target.value})} 
-              className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-xl font-bold outline-none dark:text-white border-none"
-            >
-              {["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"].map(d => <option key={d} value={d}>{d}</option>)}
-            </select>
-          </div>
-          <div className="space-y-1">
-            <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Ruangan</label>
-            <input 
-              type="text" 
-              value={formData.ruangan} 
-              onChange={e => setFormData({...formData, ruangan: e.target.value})} 
-              className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-xl font-bold dark:text-white outline-none" 
-            />
-          </div>
-          <div className="space-y-1">
-            <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Kelas</label>
-            <input 
-              type="text" 
-              value={formData.kelas} 
-              onChange={e => setFormData({...formData, kelas: e.target.value})} 
-              className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-xl font-bold dark:text-white outline-none" 
-            />
-          </div>
-          <div className="space-y-1">
-            <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Waktu</label>
-            <input 
-              type="text" 
-              value={formData.waktu} 
-              onChange={e => setFormData({...formData, waktu: e.target.value})} 
-              className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-xl font-bold dark:text-white outline-none" 
-            />
-          </div>
-        </div>
+                      {/* Baris 3: Waktu & Ruangan */}
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Hari</label>
+                          <select 
+                            value={formData.hari} 
+                            onChange={e => setFormData({...formData, hari: e.target.value})} 
+                            className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-xl font-bold outline-none dark:text-white border-none"
+                          >
+                            {["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"].map(d => <option key={d} value={d}>{d}</option>)}
+                          </select>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Ruangan</label>
+                          <input 
+                            type="text" 
+                            value={formData.ruangan} 
+                            onChange={e => setFormData({...formData, ruangan: e.target.value})} 
+                            className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-xl font-bold dark:text-white outline-none" 
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Kelas</label>
+                          <input 
+                            type="text" 
+                            value={formData.kelas} 
+                            onChange={e => setFormData({...formData, kelas: e.target.value})} 
+                            className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-xl font-bold dark:text-white outline-none" 
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Waktu</label>
+                          <input 
+                            type="text" 
+                            value={formData.waktu} 
+                            onChange={e => setFormData({...formData, waktu: e.target.value})} 
+                            className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-xl font-bold dark:text-white outline-none" 
+                          />
+                        </div>
+                      </div>
 
-        {/* Baris 4: Keterangan / Catatan Perubahan */}
-        <div className="space-y-1">
-          <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Alasan/Keterangan Perubahan</label>
-          <textarea 
-            value={formData.keterangan_rapat} 
-            onChange={e => setFormData({...formData, keterangan_rapat: e.target.value})} 
-            className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none h-24 resize-none"
-            placeholder="Contoh: Perubahan ruangan karena renovasi..."
-          />
-        </div>
+                      {/* Baris 4: Keterangan / Catatan Perubahan */}
+                      <div className="space-y-1">
+                        <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Alasan/Keterangan Perubahan</label>
+                        <textarea 
+                          value={formData.keterangan_rapat} 
+                          onChange={e => setFormData({...formData, keterangan_rapat: e.target.value})} 
+                          className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none h-24 resize-none"
+                          placeholder="Contoh: Perubahan ruangan karena renovasi..."
+                        />
+                      </div>
 
-        {/* Action Buttons */}
-        <div className="pt-4 flex flex-col sm:flex-row gap-3">
-          <button 
-            onClick={() => {
-              setShowEditModal(false);
-              setEditingId(null);
-            }} 
-            className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-500 rounded-2xl font-black uppercase"
-          >
-            Batal
-          </button>
-          <button 
-            onClick={handleUpdateManual} 
-            className="flex-1 py-4 bg-blue-600 text-white rounded-2xl font-black uppercase shadow-lg shadow-blue-500/20 hover:opacity-90 transition-all"
-          >
-            Simpan Perubahan Cloud
-          </button>
-        </div>
-      </div>
-    </div>
-  </div>
-)}
+                      {/* Action Buttons */}
+                      <div className="pt-4 flex flex-col sm:flex-row gap-3">
+                        <button 
+                          onClick={() => {
+                            setShowEditModal(false);
+                            setEditingId(null);
+                          }} 
+                          className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-500 rounded-2xl font-black uppercase"
+                        >
+                          Batal
+                        </button>
+                        <button 
+                          onClick={handleUpdateManual} 
+                          className="flex-1 py-4 bg-blue-600 text-white rounded-2xl font-black uppercase shadow-lg shadow-blue-500/20 hover:opacity-90 transition-all"
+                        >
+                          Simpan Perubahan Cloud
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
               </div>
             </main>
           </div>
