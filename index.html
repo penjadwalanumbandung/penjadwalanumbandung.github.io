@@ -1805,58 +1805,81 @@
                       <Lock size={20} />
                     </button>
 
-                    {/* 2. Dropdown Panel */}
+                    {/* 2. Dropdown / Modal Panel (Ganti Blok Ini) */}
                     {isPasscodeExpanded && (
-                      <>
-                        {/* Layer ini berfungsi agar jika klik di luar, dropdown otomatis tertutup */}
-                        <div className="fixed inset-0 z-[60]" onClick={() => setIsPasscodeExpanded(false)} />
+                      <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 sm:absolute sm:inset-auto sm:right-0 sm:top-full sm:mt-3 sm:p-0">
                         
-                        <div className="absolute right-0 mt-3 w-72 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-2xl rounded-[2rem] z-[70] overflow-hidden animate-in fade-in zoom-in duration-200 origin-top-right">
+                        {/* Backdrop transparan hitam: Hanya muncul di HP agar fokus */}
+                        <div 
+                          className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm sm:hidden" 
+                          onClick={() => setIsPasscodeExpanded(false)} 
+                        />
+                        
+                        {/* Container Panel Utama */}
+                        <div className="relative w-full max-w-[340px] sm:w-72 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-2xl rounded-[2.5rem] sm:rounded-[2rem] z-[70] overflow-hidden animate-in fade-in zoom-in duration-200 sm:origin-top-right">
                           
                           {/* Header Dropdown (Amber Area) */}
-                          <div className="bg-amber-50 dark:bg-amber-900/10 p-4 border-b border-amber-100 dark:border-amber-900/30">
-                            <div className="flex items-center gap-2">
-                              <div className="bg-amber-500 p-1.5 rounded-lg text-white shadow-sm"><Lock size={12} /></div>
-                              <span className="text-[10px] font-black text-amber-600 dark:text-amber-400 uppercase tracking-widest">Cloud Passcodes</span>
+                          <div className="bg-amber-50 dark:bg-amber-900/10 p-5 border-b border-amber-100 dark:border-amber-900/30">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <div className="bg-amber-500 p-1.5 rounded-lg text-white shadow-sm"><Lock size={12} /></div>
+                                <span className="text-[10px] font-black text-amber-600 dark:text-amber-400 uppercase tracking-widest">Cloud Passcodes</span>
+                              </div>
+                              {/* Tombol tutup khusus HP */}
+                              <button onClick={() => setIsPasscodeExpanded(false)} className="sm:hidden text-slate-400"><X size={18}/></button>
                             </div>
                           </div>
 
                           {/* List Passcodes (Scrolled Area) */}
-                          <div className="p-2 space-y-1 max-h-80 overflow-y-auto custom-scrollbar">
+                          <div className="p-3 space-y-2 max-h-[60vh] sm:max-h-80 overflow-y-auto custom-scrollbar">
                             {Object.entries(cloudPasscodeMap || {})
                               .filter(([_, name]) => name !== 'SUPER_ADMIN')
                               .sort((a, b) => a[1].localeCompare(b[1]))
                               .map(([code, name]) => (
-                                <div key={code} className="bg-slate-50 dark:bg-slate-900/50 p-3 rounded-2xl border border-transparent hover:border-amber-200 dark:hover:border-amber-900 transition-all flex flex-col gap-1 group">
-                                  <span className="text-[7px] font-black text-slate-400 uppercase truncate">{name}</span>
+                                <div key={code} className="bg-slate-50 dark:bg-slate-900/50 p-4 rounded-2xl border border-transparent hover:border-amber-200 dark:hover:border-amber-900 transition-all flex flex-col gap-1 group">
+                                  <span className="text-[8px] font-black text-slate-400 uppercase truncate">{name}</span>
                                   <div className="flex items-center justify-between">
-                                    <span className="text-[11px] font-black text-blue-600 dark:text-blue-400 tracking-wider">{code}</span>
+                                    <span className="text-[12px] font-black text-blue-600 dark:text-blue-400 tracking-wider">{code}</span>
                                     <div className="flex gap-1 items-center">
                                       <button 
                                         type="button" 
-                                        onClick={() => { navigator.clipboard.writeText(code); setToast(`Salin: ${name}`); }} 
+                                        onClick={() => { 
+                                          document.execCommand('copy'); // Fallback copy
+                                          navigator.clipboard.writeText(code); 
+                                          setToast(`Salin: ${name}`); 
+                                        }} 
                                         className="text-slate-300 hover:text-amber-600 p-1.5 transition-colors"
                                       >
-                                        <Copy size={12} />
+                                        <Copy size={14} />
                                       </button>
                                       <button 
                                         type="button" 
                                         onClick={() => { 
                                           setAdminEditData({ prodi: name, oldCode: code, newCode: '' }); 
                                           setShowAdminEditModal(true); 
-                                          setIsPasscodeExpanded(false); // Otomatis tutup dropdown saat modal edit muncul
+                                          setIsPasscodeExpanded(false);
                                         }} 
                                         className="text-slate-300 hover:text-blue-600 p-1.5 transition-colors"
                                       >
-                                        <Pencil size={12} />
+                                        <Pencil size={14} />
                                       </button>
                                     </div>
                                   </div>
                                 </div>
                               ))}
                           </div>
+                          
+                          {/* Footer Tutup (Khusus HP) */}
+                          <div className="p-4 bg-slate-50 dark:bg-slate-900/80 sm:hidden border-t dark:border-slate-700">
+                              <button 
+                                onClick={() => setIsPasscodeExpanded(false)}
+                                className="w-full py-3 bg-slate-200 dark:bg-slate-700 rounded-xl text-[10px] font-black uppercase text-slate-500"
+                              >
+                                Tutup Panel
+                              </button>
+                          </div>
                         </div>
-                      </>
+                      </div>
                     )}
                   </div>
                 )}
@@ -2568,28 +2591,58 @@
                           })}
                         </div>
                     </div>
-                    {/* MODAL ADMIN EDIT PASSCODE PRODI */}
-                        {showAdminEditModal && (
-                          <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-md animate-in">
-                            <div className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-[2.5rem] shadow-2xl p-8 border dark:border-slate-800 animate-scale-in">
-                              <div className="text-center mb-6">
-                                <div className="bg-blue-600 w-12 h-12 rounded-2xl flex items-center justify-center text-white mx-auto mb-4"><UserCog size={24} /></div>
-                                <h3 className="text-lg font-black text-slate-800 dark:text-white uppercase leading-tight">Edit Passcode</h3>
-                                <p className="text-[10px] font-bold text-blue-500 uppercase mt-2">{adminEditData.prodi}</p>
-                              </div>
-                              <div className="space-y-4">
-                                <div>
-                                  <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Passcode Baru</label>
-                                  <input type="text" value={adminEditData.newCode} onChange={(e) => setAdminEditData({...adminEditData, newCode: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl font-bold dark:text-white outline-none border dark:border-slate-700" placeholder="Min. 4 Karakter" autoFocus />
-                                </div>
-                                <div className="flex gap-2 pt-4">
-                                  <button onClick={() => setShowAdminEditModal(false)} className="flex-1 py-3.5 bg-slate-100 dark:bg-slate-800 text-slate-500 rounded-xl font-black text-[10px] uppercase">Batal</button>
-                                  <button onClick={handleAdminUpdatePasscode} className="flex-1 py-3.5 bg-blue-600 text-white rounded-xl font-black text-[10px] uppercase shadow-lg">Update</button>
-                                </div>
-                              </div>
+                    {/* MODAL ADMIN EDIT PASSCODE PRODI (VERSI RESPONSIVE) */}
+                    {showAdminEditModal && (
+                      <div className="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-950/70 backdrop-blur-md animate-in fade-in duration-300">
+                        <div className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-t-[2.5rem] sm:rounded-[2.5rem] shadow-2xl p-6 sm:p-8 border-t border-x sm:border dark:border-slate-800 animate-in slide-in-from-bottom-10 sm:zoom-in duration-300 max-h-[95vh] overflow-y-auto">
+                          
+                          {/* Header */}
+                          <div className="text-center mb-6">
+                            <div className="bg-blue-600 w-12 h-12 rounded-2xl flex items-center justify-center text-white mx-auto mb-4 shadow-lg shadow-blue-500/20">
+                              <UserCog size={24} />
+                            </div>
+                            <h3 className="text-lg font-black text-slate-800 dark:text-white uppercase leading-tight">Edit Passcode</h3>
+                            <p className="text-[10px] font-bold text-blue-500 uppercase mt-2 bg-blue-50 dark:bg-blue-900/30 inline-block px-3 py-1 rounded-full">
+                              {adminEditData.prodi}
+                            </p>
+                          </div>
+
+                          {/* Form */}
+                          <div className="space-y-4">
+                            <div>
+                              <label className="text-[9px] font-black text-slate-400 uppercase ml-2 mb-1 block">Passcode Baru</label>
+                              <input 
+                                type="text" 
+                                value={adminEditData.newCode} 
+                                onChange={(e) => setAdminEditData({...adminEditData, newCode: e.target.value})} 
+                                className="w-full bg-slate-50 dark:bg-slate-800/50 p-4 rounded-2xl font-bold dark:text-white outline-none border border-transparent focus:border-blue-500 transition-all text-center sm:text-left" 
+                                placeholder="Min. 4 Karakter" 
+                                autoFocus 
+                              />
+                            </div>
+
+                            {/* Buttons - Stacked on mobile */}
+                            <div className="flex flex-col sm:flex-row gap-3 pt-4">
+                              <button 
+                                onClick={handleAdminUpdatePasscode} 
+                                className="order-1 sm:order-2 flex-1 py-4 bg-blue-600 text-white rounded-2xl font-black text-[11px] uppercase shadow-lg shadow-blue-600/20 active:scale-95 transition-transform"
+                              >
+                                Update
+                              </button>
+                              <button 
+                                onClick={() => setShowAdminEditModal(false)} 
+                                className="order-2 sm:order-1 flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-500 rounded-2xl font-black text-[11px] uppercase"
+                              >
+                                Batal
+                              </button>
                             </div>
                           </div>
-                        )}
+
+                          {/* Extra space for mobile bottom bar */}
+                          <div className="h-6 sm:hidden"></div>
+                        </div>
+                      </div>
+                    )}
                   </>
                 )}
                 {showEditModal && (
