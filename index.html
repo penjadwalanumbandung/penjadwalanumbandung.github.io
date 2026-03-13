@@ -1963,25 +1963,40 @@
                       <div className="animate-in">
                         {/* --- PUSAT PEMELIHARAAN DATABASE (SUPER ADMIN ONLY) --- */}
                         {authorizedProdi === 'SUPER_ADMIN' && (
-                          <div className="no-print mt-4 mb-8 p-6 bg-slate-900 border-2 border-dashed border-slate-700 rounded-[2.5rem] animate-in shadow-2xl">
-                            <div className="flex items-center gap-4 mb-6">
-                              <div className="bg-amber-500 p-3 rounded-2xl text-white shadow-lg">
-                                <Database size={20} />
+                          <div className="no-print mt-4 mb-10 p-6 sm:p-8 bg-slate-900 border border-slate-800 rounded-[2.5rem] sm:rounded-[3.5rem] animate-in shadow-2xl relative overflow-hidden group">
+                            
+                            {/* Dekorasi Background Halus */}
+                            <div className="absolute top-0 right-0 w-64 h-64 bg-blue-600/5 rounded-full -translate-y-1/2 translate-x-1/2 blur-3xl pointer-events-none"></div>
+                            
+                            {/* Header Section */}
+                            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 mb-8 relative z-10">
+                              <div className="bg-gradient-to-br from-amber-400 to-orange-600 p-3.5 rounded-2xl text-white shadow-lg shadow-orange-500/20">
+                                <Database size={24} />
                               </div>
                               <div>
-                                <h4 className="text-sm font-black text-white uppercase tracking-tighter">Pusat Pemeliharaan Cloud</h4>
-                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Kontrol Penghapusan Massal & Perbaikan Data</p>
+                                <h4 className="text-base sm:text-lg font-black text-white uppercase tracking-tighter">Pusat Kendali Database</h4>
+                                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.2em] mt-1">Otoritas Super Admin • Cloud Sync Management</p>
                               </div>
                             </div>
                             
-                            <div className="flex flex-wrap gap-3">
-                              {/* Tombol Perbaikan Dashboard */}
+                            {/* Grid Tombol - Responsif: 1 kolom (HP), 2 kolom (Tablet), 3 kolom (PC) */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 relative z-10">
+                              
+                              {/* Tombol Diagnosa */}
                               <button 
                                 onClick={scanDatabaseAnomalies}
-                                className="px-5 py-3 bg-white text-slate-900 text-[10px] font-black uppercase rounded-2xl hover:bg-blue-500 hover:text-white transition-all shadow-sm flex items-center gap-2"
+                                className="flex items-center gap-4 p-4 bg-slate-800/40 hover:bg-blue-600 border border-slate-700/50 hover:border-blue-400 rounded-2xl transition-all duration-300 group/btn"
                               >
-                                🔍 Scan & Diagnosa
+                                <div className="bg-slate-700 group-hover/btn:bg-white/20 p-2.5 rounded-xl text-blue-400 group-hover/btn:text-white transition-colors">
+                                  <Search size={18} />
+                                </div>
+                                <div className="text-left">
+                                  <p className="text-white font-black text-[10px] uppercase">Diagnosa</p>
+                                  <p className="text-slate-500 group-hover/btn:text-blue-100 text-[9px] font-bold uppercase">Cek Data Corrupt</p>
+                                </div>
                               </button>
+
+                              {/* Tombol Bersihkan Corrupt */}
                               <button 
                                 onClick={async () => {
                                   const toDelete = schedules.filter(s => !s.id || !s.matkul || s.matkul.trim() === "");
@@ -1992,11 +2007,18 @@
                                   await batch.commit();
                                   setToast("🗑️ Data Corrupt Dibersihkan!");
                                 }}
-                                className="px-5 py-3 bg-white text-slate-900 text-[10px] font-black uppercase rounded-2xl hover:bg-blue-500 hover:text-white transition-all shadow-sm flex items-center gap-2"
+                                className="flex items-center gap-4 p-4 bg-slate-800/40 hover:bg-emerald-600 border border-slate-700/50 hover:border-emerald-400 rounded-2xl transition-all duration-300 group/btn"
                               >
-                                🚀 Bersihkan Jadwal Corrupt
+                                <div className="bg-slate-700 group-hover/btn:bg-white/20 p-2.5 rounded-xl text-emerald-400 group-hover/btn:text-white transition-colors">
+                                  <Check size={18} />
+                                </div>
+                                <div className="text-left">
+                                  <p className="text-white font-black text-[10px] uppercase">Auto Repair</p>
+                                  <p className="text-slate-500 group-hover/btn:text-emerald-100 text-[9px] font-bold uppercase">Hapus Row Corrupt</p>
+                                </div>
                               </button>
-                              
+
+                              {/* Tombol Ghost Slots */}
                               <button 
                                 onClick={async () => {
                                   const ghosts = schedules.filter(s => s.isVacated === true);
@@ -2007,29 +2029,58 @@
                                   await batch.commit();
                                   setToast("👻 Ghost Slots Dibersihkan!");
                                 }}
-                                className="px-5 py-3 bg-white text-slate-900 text-[10px] font-black uppercase rounded-2xl hover:bg-blue-500 hover:text-white transition-all shadow-sm flex items-center gap-2"
+                                className="flex items-center gap-4 p-4 bg-slate-800/40 hover:bg-purple-600 border border-slate-700/50 hover:border-purple-400 rounded-2xl transition-all duration-300 group/btn"
                               >
-                                👻 Bersihkan Ghost Slots
+                                <div className="bg-slate-700 group-hover/btn:bg-white/20 p-2.5 rounded-xl text-purple-400 group-hover/btn:text-white transition-colors">
+                                  <Layers size={18} />
+                                </div>
+                                <div className="text-left">
+                                  <p className="text-white font-black text-[10px] uppercase">Ghost Purge</p>
+                                  <p className="text-slate-500 group-hover/btn:text-purple-100 text-[9px] font-bold uppercase">Bersihkan Baris Kosong</p>
+                                </div>
                               </button>
 
-                              {/* Tombol Pembersihan Riwayat (Pindahan dari Menu Riwayat) */}
+                              {/* Tombol Clear Logs */}
                               <button 
                                 onClick={handleClearAllHistory}
-                                className="px-5 py-3 bg-white text-slate-900 text-[10px] font-black uppercase rounded-2xl hover:bg-blue-500 hover:text-white transition-all shadow-sm flex items-center gap-2"
+                                className="flex items-center gap-4 p-4 bg-slate-800/40 hover:bg-amber-600 border border-slate-700/50 hover:border-amber-400 rounded-2xl transition-all duration-300 group/btn"
                               >
-                                <History size={14} /> Bersihkan Semua Log Riwayat
-                              </button>
-                              
-                              <button 
-                                onClick={handleRestoreAndClean}
-                                className="px-5 py-3 bg-white text-slate-900 text-[10px] font-black uppercase rounded-2xl hover:bg-blue-500 hover:text-white transition-all shadow-sm flex items-center gap-2"
-                              >
-                                <RotateCcw size={14} /> Revert ke Jadwal Awal ({selectedProdi})
+                                <div className="bg-slate-700 group-hover/btn:bg-white/20 p-2.5 rounded-xl text-amber-400 group-hover/btn:text-white transition-colors">
+                                  <History size={18} />
+                                </div>
+                                <div className="text-left">
+                                  <p className="text-white font-black text-[10px] uppercase">Audit Reset</p>
+                                  <p className="text-slate-500 group-hover/btn:text-amber-100 text-[9px] font-bold uppercase">Hapus Seluruh Log</p>
+                                </div>
                               </button>
 
-                              {authorizedProdi === 'SUPER_ADMIN' && (
-                              <button onClick={handleClearAll} className="flex items-center gap-2 px-4 py-3 bg-red-50 dark:bg-red-900/20 text-red-600 rounded-2xl font-black text-[10px] uppercase shadow-sm hover:bg-red-600 hover:text-white transition-all"><Trash2 size={16}/> Hapus Semua Database</button>
-                            )}
+                              {/* Tombol Revert */}
+                              <button 
+                                onClick={handleRestoreAndClean}
+                                className="flex items-center gap-4 p-4 bg-slate-800/40 hover:bg-indigo-600 border border-slate-700/50 hover:border-indigo-400 rounded-2xl transition-all duration-300 group/btn"
+                              >
+                                <div className="bg-slate-700 group-hover/btn:bg-white/20 p-2.5 rounded-xl text-indigo-400 group-hover/btn:text-white transition-colors">
+                                  <RotateCcw size={18} />
+                                </div>
+                                <div className="text-left overflow-hidden">
+                                  <p className="text-white font-black text-[10px] uppercase">Rollback</p>
+                                  <p className="text-slate-500 group-hover/btn:text-indigo-100 text-[9px] font-bold uppercase truncate">Pulihkan {selectedProdi}</p>
+                                </div>
+                              </button>
+
+                              {/* Tombol Hapus Semua (Bahaya) */}
+                              <button 
+                                onClick={handleClearAll}
+                                className="flex items-center gap-4 p-4 bg-red-950/20 hover:bg-red-600 border border-red-900/30 hover:border-red-400 rounded-2xl transition-all duration-300 group/btn"
+                              >
+                                <div className="bg-red-900/50 group-hover/btn:bg-white/20 p-2.5 rounded-xl text-red-500 group-hover/btn:text-white transition-colors">
+                                  <Trash2 size={18} />
+                                </div>
+                                <div className="text-left">
+                                  <p className="text-red-500 group-hover/btn:text-white font-black text-[10px] uppercase">Factory Reset</p>
+                                  <p className="text-red-900 group-hover/btn:text-red-100 text-[9px] font-bold uppercase">Wipe All Database</p>
+                                </div>
+                              </button>
                             </div>
                           </div>
                         )}
